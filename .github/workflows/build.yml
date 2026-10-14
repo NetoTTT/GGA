@@ -25,7 +25,7 @@ jobs:
         run: >
           cmake -S . -B build -G Ninja
           -DBUILD_SDL=ON -DBUILD_QT=OFF -DUSE_FFMPEG=OFF
-          -DCMAKE_BUILD_TYPE=Release
+          -DUSE_LIBZIP=OFF -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build
       - name: Net self-test
@@ -58,6 +58,7 @@ jobs:
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-libpng
             mingw-w64-x86_64-libzip
+            mingw-w64-x86_64-libepoxy
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
