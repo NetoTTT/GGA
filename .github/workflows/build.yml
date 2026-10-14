@@ -67,6 +67,7 @@ jobs:
           -DBUILD_SDL=ON -DBUILD_QT=OFF -DUSE_FFMPEG=OFF
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_EXE_LINKER_FLAGS=-Wl,--disable-dynamicbase
+          -DCMAKE_C_FLAGS=-mcmodel=large -DCMAKE_CXX_FLAGS=-mcmodel=large
       - name: Build
         run: cmake --build build
       - name: Net self-test
