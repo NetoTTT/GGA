@@ -1,0 +1,74 @@
+# GGA CI: Linux + Windows SDL builds. No macOS by policy
+# (no maintainer hardware) — see AGENTS.md.
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  linux:
+    name: Linux SDL (gcc)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install deps
+        run: >
+          sudo apt-get update -qq &&
+          sudo apt-get install -y -qq build-essential cmake ninja-build
+          libsdl2-dev zlib1g-dev libpng-dev libzip-dev
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DBUILD_SDL=ON -DBUILD_QT=OFF -DUSE_FFMPEG=OFF
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Net self-test
+        run: >
+          gcc -I include gga/net-selftest.c src/gba/sio/net.c
+          -o /tmp/net-selftest -pthread -Wall -Wextra &&
+          /tmp/net-selftest
+      - name: Smoke test binary
+        run: ./build/sdl/mgba --version
+
+  windows:
+    name: Windows SDL (MinGW-w64)
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-libzip
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DBUILD_SDL=ON -DBUILD_QT=OFF -DUSE_FFMPEG=OFF
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Net self-test
+        run: >
+          gcc -I include gga/net-selftest.c src/gba/sio/net.c
+          -o /tmp/net-selftest -pthread -Wall -Wextra &&
+          /tmp/net-selftest
+      - name: Smoke test binary
+        run: ./build/sdl/mgba.exe --version
