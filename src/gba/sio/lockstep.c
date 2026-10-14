@@ -683,6 +683,60 @@ void GBASIOLockstepCoordinatorDetach(struct GBASIOLockstepCoordinator* coordinat
 	driver->coordinator = NULL;
 }
 
+void GBASIOLockstepCoordinatorAddProxy(struct GBASIOLockstepCoordinator* coordinator, struct GBASIOLockstepDriver* proxy) {
+	if (proxy->coordinator && proxy->coordinator != coordinator) {
+		return;
+	}
+	proxy->coordinator = coordinator;
+	MutexLock(&coordinator->mutex);
+	struct GBASIOLockstepPlayer* player = calloc(1, sizeof(*player));
+	player->driver = proxy;
+	player->mode = proxy->d.p->mode;
+	player->playerId = -1;
+	int i;
+	for (i = 0; i < MAX_LOCKSTEP_EVENTS - 1; ++i) {
+		player->buffer[i].next = &player->buffer[i + 1];
+	}
+	player->freeList = &player->buffer[0];
+	while (true) {
+		if (coordinator->nextId == UINT_MAX) {
+			coordinator->nextId = 0;
+		}
+		++coordinator->nextId;
+		unsigned id = coordinator->nextId;
+		if (!TableLookup(&coordinator->players, id)) {
+			TableInsert(&coordinator->players, id, player);
+			proxy->lockstepId = id;
+			break;
+		}
+	}
+	_reconfigPlayers(coordinator);
+	player->cycleOffset = mTimingCurrentTime(&proxy->d.p->p->timing) - coordinator->cycle;
+	MutexUnlock(&coordinator->mutex);
+}
+
+void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator* coordinator, int targetPlayerId, int senderId,
+	int type, int32_t timestamp, int32_t arg) {
+	struct GBASIOLockstepEvent event;
+	event.type = type;
+	event.playerId = senderId;
+	event.timestamp = timestamp;
+	event.next = NULL;
+	switch (type) {
+	case SIO_EV_MODE_SET:
+		event.mode = arg;
+		break;
+	case SIO_EV_TRANSFER_START:
+		event.finishCycle = arg;
+		break;
+	default:
+		break;
+	}
+	MutexLock(&coordinator->mutex);
+	_enqueueEvent(coordinator, &event, TARGET(targetPlayerId));
+	MutexUnlock(&coordinator->mutex);
+}
+
 int32_t _untilNextSync(struct GBASIOLockstepCoordinator* coordinator, struct GBASIOLockstepPlayer* player) {
 	int32_t cycle = coordinator->cycle - GBASIOLockstepTime(player);
 	if (player->playerId == 0) {

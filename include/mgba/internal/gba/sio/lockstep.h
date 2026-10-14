@@ -88,6 +88,13 @@ void GBASIOLockstepCoordinatorAttach(struct GBASIOLockstepCoordinator*, struct G
 void GBASIOLockstepCoordinatorDetach(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepDriver*);
 size_t GBASIOLockstepCoordinatorAttached(struct GBASIOLockstepCoordinator*);
 
+/* Network proxies (GGA): player entries without a local thread, driven by
+ * remote events. The proxy driver's user sleep/wake must be non-blocking
+ * no-ops; its d.p may borrow the local SIO for timing. */
+void GBASIOLockstepCoordinatorAddProxy(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepDriver* proxy);
+void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator*, int targetPlayerId, int senderId,
+	int type, int32_t timestamp, int32_t arg);
+
 void GBASIOLockstepDriverCreate(struct GBASIOLockstepDriver*, struct mLockstepUser*);
 
 CXX_GUARD_END
