@@ -26,7 +26,9 @@
 ## Phase 4 — 4-player beta + crossplay
 
 - [ ] 4-device LAN beta on commercial 4P titles
-- [ ] PC<->mobile crossplay validation (same core, same protocol)
+- [ ] Crossplay between platforms (PC <-> mobile, same core + same
+      protocol; matrix: Windows/Linux x86_64 <-> Android arm64)
+- [ ] Mixed-lobby validation: 2 PC + 2 phones in one session
 - [ ] Internet relay (separate track, after LAN is solid)
 
 ## Non-goals for now
