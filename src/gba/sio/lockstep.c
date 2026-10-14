@@ -97,7 +97,7 @@ static uint8_t GBASIOLockstepDriverFinishNormal8(struct GBASIODriver* driver);
 static uint32_t GBASIOLockstepDriverFinishNormal32(struct GBASIODriver* driver);
 
 static void GBASIOLockstepCoordinatorWaitOnPlayers(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepPlayer*);
-static void GBASIOLockstepCoordinatorAckPlayer(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepPlayer*);
+void GBASIOLockstepCoordinatorAckPlayer(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepPlayer*);
 static void GBASIOLockstepCoordinatorWakePlayers(struct GBASIOLockstepCoordinator*);
 
 static int32_t GBASIOLockstepTime(struct GBASIOLockstepPlayer*);

@@ -96,6 +96,7 @@ void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator*, int targetPla
 	int type, int32_t timestamp, int32_t arg);
 
 void GBASIOLockstepDriverCreate(struct GBASIOLockstepDriver*, struct mLockstepUser*);
+void GBASIOLockstepCoordinatorAckPlayer(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepPlayer*);
 
 CXX_GUARD_END
 
