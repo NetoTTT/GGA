@@ -69,7 +69,7 @@ jobs:
       - name: Net self-test
         run: >
           gcc -I include gga/net-selftest.c src/gba/sio/net.c
-          -o /tmp/net-selftest -pthread -Wall -Wextra &&
+          -o /tmp/net-selftest -pthread -Wall -Wextra -lws2_32 &&
           /tmp/net-selftest
       - name: Smoke test binary
         run: ./build/sdl/mgba.exe --version
