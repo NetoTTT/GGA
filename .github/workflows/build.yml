@@ -34,8 +34,10 @@ jobs:
           -o /tmp/net-selftest -pthread -Wall -Wextra &&
           /tmp/net-selftest
       - name: Smoke test binary
-        run: ./build/sdl/mgba --version
-
+        run: |
+          BIN=$(find build -name 'mgba*' -type f | head -1)
+          echo "binary: $BIN"
+          "$BIN" --version
   windows:
     name: Windows SDL (MinGW-w64)
     runs-on: windows-2022
@@ -72,4 +74,7 @@ jobs:
           -o /tmp/net-selftest -pthread -Wall -Wextra -lws2_32 &&
           /tmp/net-selftest
       - name: Smoke test binary
-        run: ./build/sdl/mgba.exe --version
+        run: |
+          BIN=$(find build -name 'mgba*.exe' -type f | head -1)
+          echo "binary: $BIN"
+          "$BIN" --version

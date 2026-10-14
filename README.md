@@ -1,5 +1,9 @@
 # GGA — Game Girl Advanced
 
+<p align="center">
+  <img src="docs/assets/gga-icon.png" alt="GGA icon" width="256" />
+</p>
+
 A mobile-first Game Boy Advance emulator with **4-player online link play**,
 built for phones and PCs to play together.
 
