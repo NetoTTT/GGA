@@ -9,7 +9,7 @@ if(POLICY CMP0072)
 	set(OpenGL_GL_PREFERENCE LEGACY)
 endif()
 
-project(mGBA)
+project(GGA)
 
 if(NOT DEFINED LIBMGBA_ONLY)
 	get_directory_property(LIBMGBA_ONLY EXCLUDE_FROM_ALL)
