@@ -77,30 +77,41 @@ struct GBASIONetLink {
 	 * afterwards (= data latched). Send once, then clear both. */
 	bool transferPending;
 	bool ackSeen;
+	/* Barrier ack tracking (ATTACH/HARD_SYNC/MODE_SET): set at inject,
+	 * sent once our thread acks locally. */
+	bool barrierPending;
 };
 
 /* Transport kinds (netdriver -> transport). 1-6 mirror GGANetEventKind;
- * 0 carries a remote slot contribution: payload [slot u8][value u32 LE]. */
+ * 0 carries a remote slot contribution: payload [slot u8][value u32 LE];
+ * 7 is a barrier ack: a = acking slot. */
 #define GGA_NETW_TRANSFER_DATA 0
+#define GGA_NETW_ACK 7
 
 void GBASIONetLinkInit(struct GBASIONetLink* link, struct GBASIOLockstepCoordinator* coordinator,
 	struct GBASIOLockstepDriver* realDriver, struct mLockstepUser* chainedUser);
 void GBASIONetLinkDeinit(struct GBASIONetLink* link);
 
-/* Add/remove a remote peer (proxy slot). wantedSlot in [1, 3]. */
+/* Add/remove a remote peer (proxy slot). Any slot in [0, 3]; the caller
+ * must not add a proxy for its own slot. */
 bool GBASIONetLinkAddPeer(struct GBASIONetLink* link, int wantedSlot);
 void GBASIONetLinkRemovePeer(struct GBASIONetLink* link, int slot);
 
 /* Pump: forward queued proxy events to the wire; enforce stall budget.
- * Call frequently from the network thread. */
+ * Call frequently from the network thread. Uses blocking locks:
+ * critical sections are short and never nest. */
 void GBASIONetLinkPoll(struct GBASIONetLink* link);
 
-/* Incoming wire message (already framed by net.c or equivalent). */
-void GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
+/* Incoming wire message (already framed by net.c or equivalent).
+ * Returns false only when the link is not attached yet: defer the
+ * frame and retry after attach (ordering is the caller's
+ * responsibility). */
+bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 	int kind, int32_t a, int32_t b, const void* data, size_t len);
 
-/* Remote slot contribution (host side): fill + ack the proxy. */
-void GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value);
+/* Remote slot contribution (host side): fill + ack the proxy.
+ * Same defer-on-unattached contract as OnWire. */
+bool GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value);
 
 CXX_GUARD_END
 

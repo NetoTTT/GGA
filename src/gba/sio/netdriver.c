@@ -303,7 +303,7 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 	UNUSED(b);
 	UNUSED(len);
 	if (link->localSlot < 0) {
-		return true; /* Not attached yet: drop pre-attach stragglers. */
+		return false; /* Not attached yet: caller defers and retries. */
 	}
 	MutexLock(&link->coordinator->mutex);
 	int32_t now = _localNow(link);
