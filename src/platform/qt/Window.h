@@ -36,6 +36,7 @@ class CoreManager;
 class DebuggerConsoleController;
 class Display;
 class DolphinConnector;
+class LANConnector;
 class FrameView;
 class GDBController;
 class GIFView;
@@ -256,6 +257,7 @@ private:
 	QPointer<OverrideView> m_overrideView;
 	QPointer<SensorView> m_sensorView;
 	QPointer<DolphinConnector> m_dolphinView;
+	QPointer<LANConnector> m_lanView;
 	QPointer<FrameView> m_frameView;
 
 #ifdef USE_FFMPEG

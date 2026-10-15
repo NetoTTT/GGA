@@ -34,6 +34,7 @@
 #include "DebuggerConsoleController.h"
 #include "Display.h"
 #include "DolphinConnector.h"
+#include "LANConnector.h"
 #include "CoreController.h"
 #include "ForwarderView.h"
 #include "FrameView.h"
@@ -1476,6 +1477,8 @@ void Window::setupMenu(QMenuBar* menubar) {
 #ifdef M_CORE_GBA
 	auto dolphin = m_actions.addAction(tr("Connect to Dolphin..."), "connectDolphin", openNamedTView<DolphinConnector>(&m_dolphinView, true, this), "file");
 	m_platformActions.insert(mPLATFORM_GBA, dolphin);
+	auto lan = m_actions.addAction(tr("LAN play..."), "lanPlay", openNamedTView<LANConnector>(&m_lanView, true, this), "file");
+	m_platformActions.insert(mPLATFORM_GBA, lan);
 #endif
 
 	m_actions.addSeparator("file");

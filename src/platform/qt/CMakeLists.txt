@@ -191,8 +191,9 @@ set(UI_FILES
 	ForwarderView.ui
 	FrameView.ui
 	GIFView.ui
-	IOViewer.ui
-	LoadSaveState.ui
+ 	IOViewer.ui
+ 	LANConnector.ui
+ 	LoadSaveState.ui
 	LogView.ui
 	MapView.ui
 	MemoryAccessLogView.ui
@@ -219,7 +220,8 @@ set(GBA_SRC
 	BattleChipUpdater.cpp
 	BattleChipView.cpp
 	DolphinConnector.cpp
-	GBAOverride.cpp)
+	GBAOverride.cpp
+	LANConnector.cpp)
 
 set(GB_SRC
 	GameBoy.cpp

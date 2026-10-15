@@ -11,6 +11,7 @@
 #include <QMutex>
 #include <QObject>
 #include <QSize>
+#include <QTimer>
 
 #include "VFileDevice.h"
 
@@ -19,6 +20,7 @@
 
 #include <mgba/core/core.h>
 #include <mgba/core/interface.h>
+#include <mgba/core/lockstep.h>
 #include <mgba/core/thread.h>
 #include <mgba/core/cache-set.h>
 
@@ -27,6 +29,9 @@
 #endif
 #ifdef M_CORE_GBA
 #include <mgba/internal/gba/sio/dolphin.h>
+#include <mgba/internal/gba/sio/lockstep.h>
+#include <mgba/internal/gba/sio/netdriver.h>
+#include <mgba/internal/gba/sio/netep.h>
 #endif
 
 #ifdef M_CORE_GBA
@@ -158,6 +163,8 @@ public slots:
 
 	void changePlayer(int id);
 
+	void pumpLAN();
+
 	void overrideMute(bool);
 
 	void loadState(int slot = 0);
@@ -208,6 +215,11 @@ public slots:
 
 	bool attachDolphin(const Address& address);
 	void detachDolphin();
+
+	bool attachLAN(bool isHost, const QString& address, int port);
+	void detachLAN();
+	bool isLANConnected() const;
+	int lanSlot() const;
 #endif
 
 	void setAVStream(mAVStream*);
@@ -330,6 +342,18 @@ private:
 	MultiplayerController* m_multiplayer = nullptr;
 #ifdef M_CORE_GBA
 	GBASIODolphin m_dolphin;
+
+	struct LANLockstepUser : mLockstepThreadUser {
+		CoreController* parent = nullptr;
+	};
+	GBASIOLockstepCoordinator m_lanCoord;
+	GBASIOLockstepDriver m_lanDriver;
+	GBASIONetLink m_lanLink;
+	GBASIONetEndpoint m_lanEndpoint;
+	GBASIONetTransport m_lanTransport;
+	LANLockstepUser m_lanUser;
+	QTimer* m_lanPump = nullptr;
+	bool m_lanActive = false;
 #endif
 
 #ifdef ENABLE_DEBUGGERS

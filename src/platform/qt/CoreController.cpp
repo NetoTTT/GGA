@@ -14,8 +14,12 @@
 
 #include <QAbstractButton>
 #include <QDateTime>
+#include <QFile>
 #include <QMessageBox>
 #include <QMutexLocker>
+#include <QThread>
+
+#include <chrono>
 
 #include <mgba/core/serialize.h>
 #include <mgba/core/version.h>
@@ -440,6 +444,131 @@ void CoreController::detachDolphin() {
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
 	}
 	GBASIODolphinDestroy(&m_dolphin);
+}
+
+static int64_t lanNowMs(void*) {
+	using namespace std::chrono;
+	return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+void CoreController::pumpLAN() {
+#ifdef M_CORE_GBA
+	if (m_lanActive) {
+		GBASIONetEndpointPoll(&m_lanEndpoint);
+	}
+#endif
+}
+
+bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
+	if (platform() != mPLATFORM_GBA) {
+		return false;
+	}
+	if (m_lanActive) {
+		detachLAN();
+	}
+	// ROM identity must match the peer: FNV-1a over the first 64 bytes,
+	// same layout as the headless link harness.
+	uint8_t romHash[32] = {};
+	QFile rom(path());
+	if (rom.open(QIODevice::ReadOnly)) {
+		QByteArray head = rom.read(64);
+		uint32_t h = 0x811C9DC5u;
+		for (char b : head) {
+			h = (h ^ uint8_t(b)) * 16777619u;
+		}
+		romHash[0] = h & 0xFF;
+		romHash[1] = (h >> 8) & 0xFF;
+		romHash[2] = (h >> 16) & 0xFF;
+		romHash[3] = (h >> 24) & 0xFF;
+	}
+	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
+	clearMultiplayerController();
+	mLockstepThreadUserInit(&m_lanUser, thread());
+	m_lanUser.parent = this;
+	m_lanUser.d.requestedId = [](mLockstepUser* ctx) {
+		auto* tctx = reinterpret_cast<mLockstepThreadUser*>(ctx);
+		auto* user = static_cast<LANLockstepUser*>(tctx);
+		return user->parent->m_lanLink.assignedSlot;
+	};
+	GBASIOLockstepCoordinatorInit(&m_lanCoord);
+	memset(&m_lanTransport, 0, sizeof(m_lanTransport));
+	m_lanTransport.nowMs = lanNowMs;
+	GBASIOLockstepDriverCreate(&m_lanDriver, &m_lanUser.d);
+	GBASIONetLinkInit(&m_lanLink, &m_lanCoord, &m_lanDriver, &m_lanUser.d);
+	GBASIONetEndpointInit(&m_lanEndpoint, &m_lanLink, &m_lanTransport);
+	GBASIONetEndpointSetIdentity(&m_lanEndpoint, romHash, isHost ? "P0" : "P1");
+	if (isHost) {
+		m_lanLink.assignedSlot = 0;
+		m_lanLink.isHost = true;
+		if (!GBASIONetEndpointListen(&m_lanEndpoint, port)) {
+			detachLAN();
+			return false;
+		}
+		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+		m_lanDriver.d.reset(&m_lanDriver.d);
+		GBASIONetLinkAddPeer(&m_lanLink, 1);
+	} else {
+		QByteArray hostBytes = address.toUtf8();
+		if (!GBASIONetEndpointConnect(&m_lanEndpoint, hostBytes.constData(), port)) {
+			detachLAN();
+			return false;
+		}
+		int spins = 0;
+		while (!m_lanEndpoint.welcomed && spins < 2000) {
+			GBASIONetEndpointPoll(&m_lanEndpoint);
+			QThread::msleep(5);
+			++spins;
+		}
+		if (!m_lanEndpoint.welcomed) {
+			detachLAN();
+			return false;
+		}
+		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+		m_lanDriver.d.reset(&m_lanDriver.d);
+		GBASIONetLinkAddPeer(&m_lanLink, 0);
+	}
+	m_lanActive = true;
+	if (!m_lanPump) {
+		m_lanPump = new QTimer(this);
+		connect(m_lanPump, &QTimer::timeout, this, &CoreController::pumpLAN);
+	}
+	m_lanPump->start(5);
+	return true;
+}
+
+void CoreController::detachLAN() {
+	if (!m_lanActive) {
+		return;
+	}
+	m_lanActive = false;
+	if (m_lanPump) {
+		m_lanPump->stop();
+	}
+	if (platform() == mPLATFORM_GBA) {
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
+		GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
+	}
+	GBASIONetLinkDeinit(&m_lanLink);
+	GBASIOLockstepCoordinatorDeinit(&m_lanCoord);
+	GBASIONetEndpointClose(&m_lanEndpoint);
+}
+
+bool CoreController::isLANConnected() const {
+#ifdef M_CORE_GBA
+	return m_lanActive && !SOCKET_FAILED(m_lanEndpoint.conn);
+#else
+	return false;
+#endif
+}
+
+int CoreController::lanSlot() const {
+#ifdef M_CORE_GBA
+	return m_lanLink.localSlot;
+#else
+	return -1;
+#endif
 }
 #endif
 
