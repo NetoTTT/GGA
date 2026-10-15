@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include <mgba/internal/gba/sio/netep.h>
 
+#include <mgba/core/log.h>
 #include <mgba/internal/gba/sio/net.h>
 #include <mgba/internal/gba/sio/netdriver.h>
 
@@ -136,6 +137,7 @@ static void _transportSend(void* context, int targetPlayer, int kind, int32_t a,
 	const void* pay = data;
 	size_t payLen = len;
 	uint8_t tmp[40];
+	(void) fixed;
 	switch (kind) {
 	case 1: /* TRANSFER_START */
 		id = 0x20;
@@ -198,6 +200,9 @@ static void _transportSend(void* context, int targetPlayer, int kind, int32_t a,
 		return;
 	}
 	(void) fixed;
+	if (id < 32) {
+		ep->statTx[id]++;
+	}
 	_outboxAppend(ep, id, pay, (uint16_t) payLen);
 }
 
@@ -216,8 +221,84 @@ static void _flushOutbox(struct GBASIONetEndpoint* ep) {
 	}
 }
 
+static void _defer(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* pay, uint16_t len) {
+	if (ep->nDeferred >= GGA_NET_DEFER_MAX || len > GGA_NET_DEFER_PAY) {
+		fprintf(stderr, "NET defer DROP id=%u\n", id);
+		return;
+	}
+	ep->deferred[ep->nDeferred].id = id;
+	ep->deferred[ep->nDeferred].len = len;
+	memcpy(ep->deferred[ep->nDeferred].pay, pay, len);
+	++ep->nDeferred;
+	fprintf(stderr, "NET deferred id=%u n=%zu\n", id, ep->nDeferred);
+}
+
+/* Route one frame into the lockstep driver. True = consumed (even if
+ * malformed and dropped); false = coordinator busy, caller should defer. */
+static bool _route(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* pay, uint16_t len) {
+	struct GBASIONetLink* link = ep->link;
+	/* Single-peer: host hears slot 1, client hears slot 0. */
+	int sender = ep->isHost ? 1 : 0;
+	switch (id) {
+	case 0x20: /* TRANSFER_START */
+		if (len < 4) {
+			return true;
+		}
+		return GBASIONetLinkOnWire(link, sender, 1, GGANetLoadI32(pay), 0, 0, 0);
+	case 0x21: /* TRANSFER_DATA */
+		if (len < 5) {
+			return true;
+		}
+		return GBASIONetLinkOnTransferData(link, pay[0], GGANetLoadU32(&pay[1]));
+	case 0x22: /* TRANSFER_RESULT */
+		if (len < 17) {
+			return true;
+		}
+		return GBASIONetLinkOnWire(link, sender, 6, 0, 0, pay, len);
+	case 0x23: { /* EVENT */
+		if (len < 6) {
+			return true;
+		}
+		int ev = pay[0];
+		int pl = pay[1];
+		int32_t arg = GGANetLoadI32(&pay[2]);
+		if (ev == 7) {
+			/* ACK addressed by player in `pl`. */
+			return GBASIONetLinkOnWire(link, pl, 7, pl, 0, 0, 0);
+		}
+		return GBASIONetLinkOnWire(link, sender, ev, arg, 0, 0, 0);
+	}
+	default:
+		return true;
+	}
+}
+
+static void _replayDeferred(struct GBASIONetEndpoint* ep) {
+	size_t done = 0;
+	while (done < ep->nDeferred) {
+		if (ep->link->localSlot < 0) {
+			break;
+		}
+		struct GGANetDeferred* d = &ep->deferred[done];
+		if (!_route(ep, d->id, d->pay, d->len)) {
+			break;
+		}
+		fprintf(stderr, "NET replayed id=%u\n", d->id);
+		++done;
+	}
+	if (done > 0) {
+		size_t rest = ep->nDeferred - done;
+		memmove(&ep->deferred[0], &ep->deferred[done], rest * sizeof(ep->deferred[0]));
+		ep->nDeferred = rest;
+	}
+}
+
 static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* pay, uint16_t len) {
 	struct GBASIONetLink* link = ep->link;
+	fprintf(stderr, "NET rx id=%u len=%u\n", id, len);
+	if (id < 32) {
+		ep->statRx[id]++;
+	}
 	switch (id) {
 	case 0x10: { /* HELLO */
 		if (!ep->isHost || len < 38) {
@@ -248,33 +329,11 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 		ep->peerBye = true;
 		break;
 	case 0x20: /* TRANSFER_START */
-		if (len >= 4) {
-			int32_t fc = GGANetLoadI32(pay);
-			GBASIONetLinkOnWire(link, 0, 1, fc, 0, 0, 0);
-		}
-		break;
 	case 0x21: /* TRANSFER_DATA */
-		if (len >= 5) {
-			uint32_t v = GGANetLoadU32(&pay[1]);
-			GBASIONetLinkOnTransferData(link, pay[0], v);
-		}
-		break;
 	case 0x22: /* TRANSFER_RESULT */
-		if (len >= 17) {
-			GBASIONetLinkOnWire(link, 0, 6, 0, 0, pay, len);
-		}
-		break;
 	case 0x23: /* EVENT */
-		if (len >= 6) {
-			int ev = pay[0];
-			int pl = pay[1];
-			int32_t arg = GGANetLoadI32(&pay[2]);
-			if (ev == 7) {
-				/* ACK addressed by player in `pl`. */
-				GBASIONetLinkOnWire(link, pl, 7, pl, 0, 0, 0);
-			} else {
-				GBASIONetLinkOnWire(link, 0, ev, arg, 0, 0, 0);
-			}
+		if (link->localSlot < 0 || !_route(ep, id, pay, len)) {
+			_defer(ep, id, pay, len);
 		}
 		break;
 	case 0x24: /* STATE_REQ */
@@ -346,9 +405,12 @@ void GBASIONetEndpointPoll(struct GBASIONetEndpoint* ep) {
 	if (!SOCKET_FAILED(ep->listenSock) && SOCKET_FAILED(ep->conn)) {
 		Socket peer = SocketAccept(ep->listenSock, 0);
 		if (!SOCKET_FAILED(peer)) {
+			fprintf(stderr, "NET accepted peer\n");
 			SocketSetBlocking(peer, false);
 			SocketSetTCPPush(peer, 1);
 			ep->conn = peer;
+		} else if (!SocketWouldBlock()) {
+			fprintf(stderr, "NET accept error %d\n", SocketError());
 		}
 	}
 	if (!SOCKET_FAILED(ep->conn)) {
@@ -406,5 +468,6 @@ peer_gone:
 	ep->conn = INVALID_SOCKET;
 	_flushOutbox(ep);
 polled:
+	_replayDeferred(ep);
 	GBASIONetLinkPoll(ep->link);
 }

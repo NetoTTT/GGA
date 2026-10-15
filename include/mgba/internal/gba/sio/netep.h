@@ -25,8 +25,16 @@
 CXX_GUARD_START
 
 #define GGA_NET_CHUNK 60000
+#define GGA_NET_DEFER_MAX 32
+#define GGA_NET_DEFER_PAY 32
 
 struct GBASIONetLink;
+
+struct GGANetDeferred {
+	uint8_t id;
+	uint16_t len;
+	uint8_t pay[GGA_NET_DEFER_PAY];
+};
 
 struct GBASIONetEndpoint {
 	struct GBASIONetLink* link;
@@ -52,6 +60,13 @@ struct GBASIONetEndpoint {
 	uint8_t inId;
 	uint16_t inPayLen;
 	size_t inPayGot;
+	long statTx[32];
+	long statRx[32];
+
+	/* Frames that arrived before the local driver attached (or while
+	 * the coordinator mutex was busy): replayed in order once ready. */
+	struct GGANetDeferred deferred[GGA_NET_DEFER_MAX];
+	size_t nDeferred;
 };
 
 void GBASIONetEndpointInit(struct GBASIONetEndpoint* ep, struct GBASIONetLink* link,

@@ -23,6 +23,7 @@ static void _proxyWake(struct mLockstepUser* user) {
 
 static int _proxyRequestedId(struct mLockstepUser* user) {
 	struct GBASIONetProxyUser* proxy = (struct GBASIONetProxyUser*) user;
+	fprintf(stderr, "DBG reqId proxy -> %d\n", proxy->wantedSlot);
 	return proxy->wantedSlot;
 }
 
@@ -43,6 +44,7 @@ static void _chainWake(struct mLockstepUser* user) {
 
 static int _chainRequestedId(struct mLockstepUser* user) {
 	struct GBASIONetLink* link = (struct GBASIONetLink*) ((char*) user - offsetof(struct GBASIONetLink, chainUser));
+	fprintf(stderr, "DBG reqId chain -> %d\n", link->assignedSlot);
 	return link->assignedSlot;
 }
 
@@ -50,6 +52,7 @@ static void _chainPlayerIdChanged(struct mLockstepUser* user, int id) {
 	struct GBASIONetLink* link = (struct GBASIONetLink*) ((char*) user - offsetof(struct GBASIONetLink, chainUser));
 	link->localSlot = id;
 	link->isHost = (id == 0);
+	fprintf(stderr, "DBG idChanged -> %d\n", id);
 	if (link->chainedUser && link->chainedUser->playerIdChanged) {
 		link->chainedUser->playerIdChanged(link->chainedUser, id);
 	}
@@ -85,7 +88,7 @@ void GBASIONetLinkDeinit(struct GBASIONetLink* link) {
 }
 
 bool GBASIONetLinkAddPeer(struct GBASIONetLink* link, int wantedSlot) {
-	if (wantedSlot < 1 || wantedSlot > MAX_GBAS - 1) {
+	if (wantedSlot < 0 || wantedSlot >= MAX_GBAS) {
 		return false;
 	}
 	int i;
@@ -253,6 +256,8 @@ static void _enforceStall(struct GBASIONetLink* link) {
 	}
 }
 
+/* Pump paths use blocking locks: critical sections are short and never
+ * nest, and opportunistic try-locks were observed to starve here. */
 void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 	MutexLock(&link->coordinator->mutex);
 	_tapProxies(link);
@@ -281,14 +286,25 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 		link->transferPending = false;
 		link->ackSeen = false;
 	}
+	if (!link->isHost && link->barrierPending && link->ackSeen) {
+		if (link->transport.send) {
+			link->transport.send(link->transport.context, 0,
+				GGA_NETW_ACK, link->localSlot, 0, 0, 0);
+		}
+		link->barrierPending = false;
+		link->ackSeen = false;
+	}
 	_enforceStall(link);
 	MutexUnlock(&link->coordinator->mutex);
 }
 
-void GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
+bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 	int kind, int32_t a, int32_t b, const void* data, size_t len) {
 	UNUSED(b);
 	UNUSED(len);
+	if (link->localSlot < 0) {
+		return true; /* Not attached yet: drop pre-attach stragglers. */
+	}
 	MutexLock(&link->coordinator->mutex);
 	int32_t now = _localNow(link);
 	switch (kind) {
@@ -306,15 +322,26 @@ void GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 	case GGA_NET_EV_MODE_SET:
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
 			SIO_EV_MODE_SET, now, a);
+		link->barrierPending = true;
+		link->ackSeen = false;
 		break;
 	case GGA_NET_EV_HARD_SYNC:
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
 			SIO_EV_HARD_SYNC, now, 0);
+		link->barrierPending = true;
+		link->ackSeen = false;
 		break;
 	case GGA_NET_EV_ATTACH:
+		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
+			SIO_EV_ATTACH, now, 0);
+		/* Attach is a barrier too: the peer must observe us before
+		 * either side proceeds, otherwise both park forever. */
+		link->barrierPending = true;
+		link->ackSeen = false;
+		break;
 	case GGA_NET_EV_DETACH:
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
-			kind == GGA_NET_EV_ATTACH ? SIO_EV_ATTACH : SIO_EV_DETACH, now, 0);
+			SIO_EV_DETACH, now, 0);
 		if (kind == GGA_NET_EV_DETACH) {
 			GBASIONetLinkRemovePeer(link, senderSlot);
 		}
@@ -344,16 +371,33 @@ void GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 		break;
 	}
 	default:
-		/* TRANSFER_DATA arrives as kind 0x20 namespace; handled by caller
-		 * mapping: slots are filled + acked here. */
 		break;
 	}
+	if (kind >= GGA_NET_EV_TRANSFER_START && kind <= GGA_NET_EV_DETACH) {
+		/* Wake our thread so it processes the injected event. Without
+		 * this, an idled secondary never runs to ack. */
+		if (link->chainedUser && link->chainedUser->wake) {
+			link->chainedUser->wake(link->chainedUser);
+		}
+	}
+	if (kind == GGA_NETW_TRANSFER_DATA && data && len >= 5) {
+		const uint8_t* p = data;
+		uint32_t v = (uint32_t) p[1] | ((uint32_t) p[2] << 8)
+			| ((uint32_t) p[3] << 16) | ((uint32_t) p[4] << 24);
+		GBASIONetLinkOnTransferData(link, p[0], v);
+	} else if (kind == GGA_NETW_ACK) {
+		struct GBASIOLockstepPlayer* proxy = _findProxy(link, a);
+		if (proxy) {
+			GBASIOLockstepCoordinatorAckPlayer(link->coordinator, proxy);
+		}
+	}
 	MutexUnlock(&link->coordinator->mutex);
+	return true;
 }
 
 /* TRANSFER_DATA (remote slot contribution, host side). Kind namespace
  * keeps wire ids stable with net.h framing. */
-void GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value) {
+bool GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value) {
 	MutexLock(&link->coordinator->mutex);
 	_writeSlot(link, slot, value);
 	if (slot >= 0 && slot < MAX_GBAS) {
@@ -364,4 +408,5 @@ void GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t 
 		GBASIOLockstepCoordinatorAckPlayer(link->coordinator, proxy);
 	}
 	MutexUnlock(&link->coordinator->mutex);
+	return true;
 }
