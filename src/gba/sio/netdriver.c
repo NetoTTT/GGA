@@ -28,6 +28,7 @@ static int _proxyRequestedId(struct mLockstepUser* user) {
 
 static void _chainSleep(struct mLockstepUser* user) {
 	struct GBASIONetLink* link = (struct GBASIONetLink*) ((char*) user - offsetof(struct GBASIONetLink, chainUser));
+	link->ackSeen = true;
 	if (link->chainedUser && link->chainedUser->sleep) {
 		link->chainedUser->sleep(link->chainedUser);
 	}
@@ -262,6 +263,24 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 		}
 		link->transferSeen = false;
 	}
+	if (!link->isHost && link->transferPending && link->ackSeen) {
+		/* Our thread latched its slot: ship the contribution. */
+		uint32_t v = (link->coordinator->transferMode == GBA_SIO_MULTI)
+			? link->coordinator->multiData[link->localSlot]
+			: link->coordinator->normalData[link->localSlot];
+		uint8_t pay[5];
+		pay[0] = (uint8_t) link->localSlot;
+		pay[1] = v & 0xFF;
+		pay[2] = (v >> 8) & 0xFF;
+		pay[3] = (v >> 16) & 0xFF;
+		pay[4] = (v >> 24) & 0xFF;
+		if (link->transport.send) {
+			link->transport.send(link->transport.context, 0,
+				GGA_NETW_TRANSFER_DATA, 0, 0, pay, sizeof(pay));
+		}
+		link->transferPending = false;
+		link->ackSeen = false;
+	}
 	_enforceStall(link);
 	MutexUnlock(&link->coordinator->mutex);
 }
@@ -280,6 +299,8 @@ void GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 			sio->siocnt, link->coordinator->nAttached);
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
 			SIO_EV_TRANSFER_START, now, finish);
+		link->transferPending = true;
+		link->ackSeen = false;
 		break;
 	}
 	case GGA_NET_EV_MODE_SET:

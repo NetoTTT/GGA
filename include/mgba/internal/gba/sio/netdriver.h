@@ -72,7 +72,16 @@ struct GBASIONetLink {
 	bool isHost;
 	int64_t transferStartMs;
 	bool transferSeen;
+	/* Remote contribution tracking: transferPending set when a
+	 * TRANSFER_START is injected; ackSeen set when our thread sleeps
+	 * afterwards (= data latched). Send once, then clear both. */
+	bool transferPending;
+	bool ackSeen;
 };
+
+/* Transport kinds (netdriver -> transport). 1-6 mirror GGANetEventKind;
+ * 0 carries a remote slot contribution: payload [slot u8][value u32 LE]. */
+#define GGA_NETW_TRANSFER_DATA 0
 
 void GBASIONetLinkInit(struct GBASIONetLink* link, struct GBASIOLockstepCoordinator* coordinator,
 	struct GBASIOLockstepDriver* realDriver, struct mLockstepUser* chainedUser);
