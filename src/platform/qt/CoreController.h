@@ -220,6 +220,7 @@ public slots:
 	void detachLAN();
 	bool isLANConnected() const;
 	int lanSlot() const;
+	int lanRejectReason() const;
 #endif
 
 	void setAVStream(mAVStream*);

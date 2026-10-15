@@ -68,9 +68,20 @@ void LANConnector::join() {
 	m_controller = m_window->controller();
 	CoreController::Interrupter interrupter(m_controller);
 	if (!m_controller->attachLAN(false, addr, m_ui.joinPort->value())) {
-		QMessageBox* fail = new QMessageBox(QMessageBox::Warning, tr("Couldn't Connect"),
-		                                    tr("Could not join %1. Check the IP, port and ROM.").arg(addr),
-		                                    QMessageBox::Ok);
+		QString why;
+		switch (m_controller->lanRejectReason()) {
+		case 3:
+			why = tr("ROM mismatch: both sides need the identical ROM dump.");
+			break;
+		case 1:
+		case 2:
+			why = tr("Version mismatch: update both sides to the same build.");
+			break;
+		default:
+			why = tr("Could not join %1. Check the IP, port and ROM.").arg(addr);
+			break;
+		}
+		QMessageBox* fail = new QMessageBox(QMessageBox::Warning, tr("Couldn't Connect"), why, QMessageBox::Ok);
 		fail->setAttribute(Qt::WA_DeleteOnClose);
 		fail->show();
 		m_controller.reset();

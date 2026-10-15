@@ -467,14 +467,25 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 		detachLAN();
 	}
 	// ROM identity must match the peer: FNV-1a over the first 64 bytes,
-	// same layout as the headless link harness.
+	// same layout as the headless link harness. Read from the loaded
+	// ROM image so archives (.zip) hash identically to flat dumps.
 	uint8_t romHash[32] = {};
-	QFile rom(path());
-	if (rom.open(QIODevice::ReadOnly)) {
-		QByteArray head = rom.read(64);
+	GBA* gba = static_cast<GBA*>(m_threadContext.core->board);
+	size_t romAvail = gba ? gba->memory.romSize : 0;
+	const uint8_t* romBytes = gba ? reinterpret_cast<const uint8_t*>(gba->memory.rom) : nullptr;
+	QByteArray head;
+	if (romBytes && romAvail >= 64) {
+		head = QByteArray(reinterpret_cast<const char*>(romBytes), 64);
+	} else {
+		QFile rom(path());
+		if (rom.open(QIODevice::ReadOnly)) {
+			head = rom.read(64);
+		}
+	}
+	if (head.size() >= 64) {
 		uint32_t h = 0x811C9DC5u;
-		for (char b : head) {
-			h = (h ^ uint8_t(b)) * 16777619u;
+		for (int i = 0; i < 64; ++i) {
+			h = (h ^ uint8_t(head[i])) * 16777619u;
 		}
 		romHash[0] = h & 0xFF;
 		romHash[1] = (h >> 8) & 0xFF;
@@ -568,6 +579,14 @@ int CoreController::lanSlot() const {
 	return m_lanLink.localSlot;
 #else
 	return -1;
+#endif
+}
+
+int CoreController::lanRejectReason() const {
+#ifdef M_CORE_GBA
+	return m_lanEndpoint.rejectReason;
+#else
+	return 0;
 #endif
 }
 #endif

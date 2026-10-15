@@ -327,6 +327,9 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 		break;
 	case 0x12: /* REJECT */
 		ep->peerBye = true;
+		if (len >= 1) {
+			ep->rejectReason = pay[0];
+		}
 		break;
 	case 0x20: /* TRANSFER_START */
 	case 0x21: /* TRANSFER_DATA */

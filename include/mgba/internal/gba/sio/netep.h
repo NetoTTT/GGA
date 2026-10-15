@@ -43,6 +43,7 @@ struct GBASIONetEndpoint {
 	bool isHost;
 	bool welcomed; /* client side */
 	bool peerBye;
+	uint8_t rejectReason; /* valid when peerBye came from REJECT */
 
 	uint8_t romHash[32];
 	char name[64];
