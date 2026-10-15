@@ -165,6 +165,7 @@ include(DebugStrip)
 add_custom_target(${BINARY_NAME}-version-info ALL
 	COMMAND ${CMAKE_COMMAND}
 	-DBINARY_NAME=${BINARY_NAME}
+	-DPROJECT_NAME=${PROJECT_NAME}
 	-DCONFIG_FILE=${CMAKE_CURRENT_SOURCE_DIR}/src/core/version.c.in
 	-DOUT_FILE=${CMAKE_CURRENT_BINARY_DIR}/version.c
 	-P ${CMAKE_CURRENT_SOURCE_DIR}/version.cmake
