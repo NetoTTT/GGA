@@ -39,7 +39,8 @@ set(SIO_FILES
 	sio/dolphin.c
 	sio/lockstep.c
 	sio/net.c
-	sio/netdriver.c)
+	sio/netdriver.c
+	sio/netep.c)
 
 set(EXTRA_FILES
 	extra/battlechip.c

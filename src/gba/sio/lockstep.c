@@ -717,6 +717,7 @@ void GBASIOLockstepCoordinatorAddProxy(struct GBASIOLockstepCoordinator* coordin
 
 void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator* coordinator, int targetPlayerId, int senderId,
 	int type, int32_t timestamp, int32_t arg) {
+	/* Caller must hold coordinator->mutex (same convention as _enqueueEvent). */
 	struct GBASIOLockstepEvent event;
 	event.type = type;
 	event.playerId = senderId;
@@ -732,9 +733,7 @@ void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator* coordinator, i
 	default:
 		break;
 	}
-	MutexLock(&coordinator->mutex);
 	_enqueueEvent(coordinator, &event, TARGET(targetPlayerId));
-	MutexUnlock(&coordinator->mutex);
 }
 
 int32_t _untilNextSync(struct GBASIOLockstepCoordinator* coordinator, struct GBASIOLockstepPlayer* player) {

@@ -22,13 +22,15 @@ Framing: `[u8 id][u16 le len][payload]`. All multi-byte integers LE.
 
 | id | Name | Dir | Payload |
 |----|------|-----|---------|
-| 0x10 | HELLO | C->H | proto u8 (=1), core_ver u32, rom_hash (SHA-256, 32B), name_len u8, name |
-| 0x11 | WELCOME | H->C | player_id u8, start_cycle i32 |
+| 0x10 | HELLO | C->H | proto u8 (=1), core u32, romhash 32B, name_len u8, name |
+| 0x11 | WELCOME | H->C | player u8, start_cycle i32 |
 | 0x12 | REJECT | H->C | reason u8 (1=proto 2=core 3=rom 4=full) |
-| 0x20 | TRANSFER | both | cycle i32, slot u8, data u16 |
-| 0x21 | EVENT | both | type u8 (attach/detach/mode/hardsync), player u8, arg i32 |
-| 0x22 | STATE_REQ | C->H | (empty; asks host for full state) |
-| 0x23 | STATE | H->C | len u32 + versioned savestate bytes |
+| 0x20 | TRANSFER_START | H->all | finish_cycle i32 |
+| 0x21 | TRANSFER_DATA | C->H | slot u8, value u32 |
+| 0x22 | TRANSFER_RESULT | H->all | mode u8, d0..d3 u32 |
+| 0x23 | EVENT | both | type u8 (1=transfer_start legacy, use 0x20; 2=mode 3=hardsync 4=attach 5=detach), player u8, arg i32 |
+| 0x24 | STATE_REQ | C->H | (empty) |
+| 0x25 | STATE | H->C | len u32 + versioned savestate bytes |
 | 0x06 | HEARTBEAT | both | cycle i32 |
 | 0x07 | BYE | both | reason u8 |
 

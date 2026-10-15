@@ -92,6 +92,8 @@ size_t GBASIOLockstepCoordinatorAttached(struct GBASIOLockstepCoordinator*);
  * remote events. The proxy driver's user sleep/wake must be non-blocking
  * no-ops; its d.p may borrow the local SIO for timing. */
 void GBASIOLockstepCoordinatorAddProxy(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepDriver* proxy);
+/* Enqueue a remote event for a proxy's player. Caller must hold the
+ * coordinator mutex (same convention as the internal _enqueueEvent). */
 void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator*, int targetPlayerId, int senderId,
 	int type, int32_t timestamp, int32_t arg);
 
