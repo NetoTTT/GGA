@@ -8,10 +8,25 @@
 
 ## Phase 1 — Network link driver
 
-- [ ] `GBASIODriver` implementation over TCP (modeled on `src/gba/sio/lockstep.c`)
-- [ ] Wire protocol: handshake (versions + ROM hash), per-transfer 16-bit
-      payloads, desync detection and resync
-- [ ] Host election + late join over full-state transfer
+- [x] TCP transport (`src/gba/sio/net.c`): framing, handshake
+      (proto/core/ROM hash), per-transfer payloads
+- [x] Lockstep bridge (`netdriver.c` + proxy hooks): 2-process
+      host+client reach full frame target over TCP loopback
+      (`gga/link-netharness2.c`)
+- [ ] Wire protocol: desync detection and resync, late join over
+      full-state transfer
+- [ ] Host election for >2 players
+
+### Phase 1b — LAN UI (planned, Qt frontend)
+
+- [ ] New "LAN" tab/dialog: Host button (port field, default 27182,
+      slot list 0-3) and Join button (host IP/hostname + port fields)
+- [ ] Connection status per slot (connecting/ready/dropped), start
+      session only when all attached
+- [ ] No-account design: plain TCP works over LAN and over VPN
+      (ZeroTier/Tailscale/WireGuard) for distance play with no relay
+- [ ] Later: lobby hub (Phase 3) — room list, join-by-code, open-host
+      directory; internet relay stays a separate track after LAN is solid
 
 ## Phase 2 — Android frontend
 
