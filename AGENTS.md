@@ -60,8 +60,14 @@ gcc -I include gga/net-selftest.c src/gba/sio/net.c \
   -o /tmp/net-selftest -pthread && /tmp/net-selftest
 ```
 
-Windows native route: MSYS2/MinGW-w64 (see CI workflow); macOS is
-**not** a target (no maintainer hardware — do not add macOS CI/jobs).
+Windows native route: MSVC Build Tools + Qt via `aqtinstall` + Ninja;
+minimal `PATH` (MSYS2/Strawberry entries leak MinGW headers into `cl.exe`).
+Known gotchas: MinGW GCC 16 pseudo-reloc overflow on the Qt exe (use the
+MSVC route, not `-mcmodel` hacks); vcpkg zlib/libpng break on new MSVC —
+build them from source into a local prefix instead. Never `rm -rf` a
+deploy dir without re-running `windeployqt --compiler-runtime` plus the
+runtime DLL set afterwards. macOS is **not** a target (no maintainer
+hardware — do not add macOS CI/jobs).
 
 ## CI (`.github/workflows/`)
 
