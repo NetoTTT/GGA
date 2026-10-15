@@ -1477,7 +1477,7 @@ void Window::setupMenu(QMenuBar* menubar) {
 #ifdef M_CORE_GBA
 	auto dolphin = m_actions.addAction(tr("Connect to Dolphin..."), "connectDolphin", openNamedTView<DolphinConnector>(&m_dolphinView, true, this), "file");
 	m_platformActions.insert(mPLATFORM_GBA, dolphin);
-	auto lan = m_actions.addAction(tr("LAN play..."), "lanPlay", openNamedTView<LANConnector>(&m_lanView, true, this), "file");
+	auto lan = m_actions.addAction(tr("LAN play..."), "lanPlay", openNamedTView<LANConnector>(&m_lanView, true, this), "lan");
 	m_platformActions.insert(mPLATFORM_GBA, lan);
 #endif
 
@@ -1769,6 +1769,7 @@ void Window::setupMenu(QMenuBar* menubar) {
 #endif
 
 	m_actions.addMenu(tr("&Tools"), "tools");
+	m_actions.addMenu(tr("&LAN"), "lan");
 	m_actions.addAction(tr("View &logs..."), "viewLogs", static_cast<QWidget*>(m_logView), &QWidget::show, "tools");
 
 	m_actions.addAction(tr("Game &overrides..."), "overrideWindow", [this]() {
