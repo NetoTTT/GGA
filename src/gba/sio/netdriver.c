@@ -324,12 +324,29 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 			SIO_EV_MODE_SET, now, a);
 		link->barrierPending = true;
 		link->ackSeen = false;
+		/* Control-plane barrier like attach/clock: the mode value is
+		 * applied in queue order when our thread gets there, so ack
+		 * on receipt. Only TRANSFER (payload data) waits for the
+		 * thread latch. */
+		if (link->transport.send) {
+			link->transport.send(link->transport.context, 0,
+				GGA_NETW_ACK, link->localSlot, 0, 0, 0);
+		}
 		break;
 	case GGA_NET_EV_HARD_SYNC:
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
 			SIO_EV_HARD_SYNC, now, 0);
 		link->barrierPending = true;
 		link->ackSeen = false;
+		/* Clock-only barrier (no payload): ack on receipt like
+		 * attach. A freely-running peer may never latch to ack,
+		 * which would starve the clock owner. The timestamp is
+		 * absolute so late processing still aligns; order is kept
+		 * by the queue. */
+		if (link->transport.send) {
+			link->transport.send(link->transport.context, 0,
+				GGA_NETW_ACK, link->localSlot, 0, 0, 0);
+		}
 		break;
 	case GGA_NET_EV_ATTACH:
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,

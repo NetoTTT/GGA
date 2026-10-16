@@ -55,6 +55,19 @@ Rules:
 - Determinism is inherited: identical core + identical transfer stream
   = identical state. The existing desync asserts become our test oracle.
 
+## Barrier ack policy (v1)
+
+- Control plane (ATTACH, MODE_SET, HARD_SYNC) acks on receipt: no
+  payload depends on the thread, events stay ordered in the queue, and
+  a freely-running peer never starves the other side. The clock value
+  in HARD_SYNC is absolute, so late processing still aligns.
+- Data plane (TRANSFER_START/DATA/RESULT) acks only after the local
+  thread latches, because the slot contribution must be written
+  before the host broadcasts the result. A peer that never reaches a
+  transfer barrier (idle game) cannot complete someone else's
+  transfer; driven gameplay on both sides latches as a matter of
+  course (transfer completion forces the sleep).
+
 ## Test plan (no ROMs in repo; user supplies their dumps)
 
 1. Loopback: 2× `mgba-sdl` on one PC, host + client, commercial 2P title.
