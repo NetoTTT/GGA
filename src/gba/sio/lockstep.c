@@ -8,6 +8,9 @@
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/io.h>
 
+/* TEMP DIAG (revert with the evCount print in _lockstepEvent). */
+#include <stdio.h>
+
 #define DRIVER_ID 0x6B636F4C
 #define DRIVER_STATE_VERSION 1
 #define LOCKSTEP_INTERVAL 4096
@@ -971,6 +974,17 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 	struct GBASIOLockstepCoordinator* coordinator = lockstep->coordinator;
 	MutexLock(&coordinator->mutex);
 	struct GBASIOLockstepPlayer* player = TableLookup(&coordinator->players, lockstep->lockstepId);
+	/* TEMP DIAG (revert): who spins, and is their queue stuck? */
+	static unsigned long evCount = 0;
+	if (++evCount % 5000 == 0) {
+		int32_t ptime = player ? GBASIOLockstepTime(player) : -999999;
+		int32_t headTs = (player && player->queue) ? player->queue->timestamp : -999999;
+		int32_t nevt = player ? _untilNextSync(coordinator, player) : -999999;
+		fprintf(stderr, "DBG lockstep events=%lu pid=%d q=%d asleep=%d cyc=%d ptime=%d head=%d nevt=%d\n", evCount,
+			player ? player->playerId : -99, (player && player->queue) ? 1 : 0,
+			player ? player->asleep : -99,
+			coordinator->cycle, ptime, headTs, nevt);
+	}
 	struct GBASIO* sio = player->driver->d.p;
 	mASSERT_LOG(GBA_SIO, player->playerId >= 0 && player->playerId < 4, "Invalid multiplayer ID %i", player->playerId);
 

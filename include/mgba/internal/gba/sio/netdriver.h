@@ -25,7 +25,7 @@
 CXX_GUARD_START
 
 #define GGA_NET_MAX_PEERS 3
-#define GGA_NET_STALL_BUDGET_MS 100
+#define GGA_NET_STALL_BUDGET_MS 2000 /* TEMP experiment: is the peer just slow? */
 
 enum GGANetEventKind {
 	GGA_NET_EV_TRANSFER_START = 1,
@@ -108,6 +108,12 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link);
  * responsibility). */
 bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 	int kind, int32_t a, int32_t b, const void* data, size_t len);
+
+/* Session start: align the shared clock to local time (see .c). */
+void GBASIONetLinkResetClock(struct GBASIONetLink* link);
+
+/* Session start: drop a stale asleep flag (see .c). Call paused. */
+void GBASIONetLinkClearStaleSleep(struct GBASIONetLink* link);
 
 /* Remote slot contribution (host side): fill + ack the proxy.
  * Same defer-on-unattached contract as OnWire. */

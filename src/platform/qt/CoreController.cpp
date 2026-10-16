@@ -611,9 +611,11 @@ bool CoreController::pollClientAttach() {
 		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
 		m_lanDriverAttached = true;
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+		GBASIONetLinkResetClock(&m_lanLink);
 		m_lanDriver.d.reset(&m_lanDriver.d);
-	GBASIONetLinkAddPeer(&m_lanLink, 0);
-	fprintf(stderr, "NET client peer added\n");
+		GBASIONetLinkAddPeer(&m_lanLink, 0);
+		GBASIONetLinkClearStaleSleep(&m_lanLink);
+		fprintf(stderr, "NET client peer added\n");
 	interrupter.resume();
 	}
 	m_lanSession = true;
@@ -689,8 +691,10 @@ bool CoreController::pollHostSession() {
 		// setPeripheral binds d.p; AddPeer copies it into the proxy, so
 		// this must come first (a NULL sio crashes the session later).
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+		GBASIONetLinkResetClock(&m_lanLink);
 		m_lanDriver.d.reset(&m_lanDriver.d);
 		GBASIONetLinkAddPeer(&m_lanLink, 1);
+		GBASIONetLinkClearStaleSleep(&m_lanLink);
 		fprintf(stderr, "NET host peer added\n");
 		interrupter.resume();
 	}

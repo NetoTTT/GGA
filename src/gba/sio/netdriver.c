@@ -29,6 +29,11 @@ static int _proxyRequestedId(struct mLockstepUser* user) {
 
 static void _chainSleep(struct mLockstepUser* user) {
 	struct GBASIONetLink* link = (struct GBASIONetLink*) ((char*) user - offsetof(struct GBASIONetLink, chainUser));
+	/* TEMP DIAG (revert): prove the thread latches barriers. */
+	static unsigned long sleepCount = 0;
+	if (++sleepCount % 100 == 0) {
+		fprintf(stderr, "DBG chain sleeps=%lu slot=%d\n", sleepCount, link->localSlot);
+	}
 	link->ackSeen = true;
 	if (link->chainedUser && link->chainedUser->sleep) {
 		link->chainedUser->sleep(link->chainedUser);
@@ -256,6 +261,27 @@ static void _enforceStall(struct GBASIONetLink* link) {
 	}
 }
 
+/* Keep player time and wire timestamps in the same domain. Without a local
+ * player 0 nothing advances coordinator->cycle, so it lags real time more
+ * every second; offsets computed against it then freeze player time while
+ * wire timestamps keep growing, wedging queues forever-future and spinning
+ * the event loop. Re-anchor while idle (never mid-transfer: in-flight
+ * windows need stability). Steady state this is a no-op. Stale-future
+ * events flush through as due on the first snap, which is the recovery. */
+static void _alignClock(struct GBASIONetLink* link) {
+	if (link->coordinator->transferActive || link->localSlot < 0) {
+		return;
+	}
+	struct GBASIOLockstepPlayer* player = TableLookup(
+		&link->coordinator->players, link->realDriver->lockstepId);
+	if (!player) {
+		return;
+	}
+	int32_t now = _localNow(link);
+	link->coordinator->cycle = now;
+	player->cycleOffset = mTimingCurrentTime(&link->realDriver->d.p->p->timing) - now;
+}
+
 /* Pump paths use blocking locks: critical sections are short and never
  * nest, and opportunistic try-locks were observed to starve here. */
 void GBASIONetLinkPoll(struct GBASIONetLink* link) {
@@ -294,6 +320,7 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 		link->barrierPending = false;
 		link->ackSeen = false;
 	}
+	_alignClock(link);
 	_enforceStall(link);
 	MutexUnlock(&link->coordinator->mutex);
 }
@@ -421,9 +448,32 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 	return true;
 }
 
+/* Session start: align the shared clock to local time. Without a local
+ * player 0 nothing ever advances coordinator->cycle, so offsets computed
+ * against a stale cycle put player time and wire timestamps in different
+ * domains: injected events look infinitely future, the queue never
+ * drains, sleeps never happen and the event loop spins. */
+void GBASIONetLinkResetClock(struct GBASIONetLink* link) {
+	MutexLock(&link->coordinator->mutex);
+	link->coordinator->cycle = _localNow(link);
+	MutexUnlock(&link->coordinator->mutex);
+}
+
+/* Fresh session: drop a stale asleep flag. Sleep is edge-triggered, so a
+ * park from before the reboot (unparked without PlayerWake) would neuter
+ * every future latch. Call paused, before the new session runs. */
+void GBASIONetLinkClearStaleSleep(struct GBASIONetLink* link) {
+	MutexLock(&link->coordinator->mutex);
+	struct GBASIOLockstepPlayer* player = TableLookup(
+		&link->coordinator->players, link->realDriver->lockstepId);
+	if (player) {
+		player->asleep = false;
+	}
+	MutexUnlock(&link->coordinator->mutex);
+}
+
 /* TRANSFER_DATA (remote slot contribution, host side). Kind namespace
- * keeps wire ids stable with net.h framing. */
-bool GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value) {
+ * keeps wire ids stable with net.h framing. */bool GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value) {
 	MutexLock(&link->coordinator->mutex);
 	_writeSlot(link, slot, value);
 	if (slot >= 0 && slot < MAX_GBAS) {
