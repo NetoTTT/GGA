@@ -224,6 +224,7 @@ CoreController::~CoreController() {
 	endVideoLog();
 	stop();
 	disconnect();
+	detachLAN();
 
 	mCoreThreadJoin(&m_threadContext);
 
@@ -469,9 +470,10 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 	}
 	m_lanError.clear();
 	m_lanJoinStartMs = 0;
-	// Mirror stderr to a file: GUI builds have no console, and the
-	// netplay traces are the only window into link issues.
-	QString logPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/lanplay.log");
+	// Mirror stderr to a per-process file: GUI builds have no console,
+	// and the netplay traces are the only window into link issues.
+	QString logPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+		+ QStringLiteral("/lanplay-%1.log").arg(QCoreApplication::applicationPid());
 	freopen(logPath.toLocal8Bit().constData(), "w", stderr);
 	// ROM identity must match the peer: FNV-1a over the first 64 bytes,
 	// same layout as the headless link harness. Read from the loaded
@@ -584,6 +586,7 @@ bool CoreController::pollClientAttach() {
 	}
 	CoreController::Interrupter interrupter(this);
 	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+	m_lanDriverAttached = true;
 	GBASIONetLinkAddPeer(&m_lanLink, 0);
 	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
 	m_lanDriver.d.reset(&m_lanDriver.d);
@@ -605,7 +608,10 @@ void CoreController::detachLAN() {
 	stopLanWorker();
 	if (platform() == mPLATFORM_GBA) {
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
-		GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
+		if (m_lanDriverAttached) {
+			GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
+			m_lanDriverAttached = false;
+		}
 	}
 	GBASIONetLinkDeinit(&m_lanLink);
 	GBASIOLockstepCoordinatorDeinit(&m_lanCoord);
@@ -640,6 +646,7 @@ bool CoreController::pollHostSession() {
 	// the session from identical states on both sides.
 	CoreController::Interrupter interrupter(this);
 	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+	m_lanDriverAttached = true;
 	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
 	m_lanDriver.d.reset(&m_lanDriver.d);
 	GBASIONetLinkAddPeer(&m_lanLink, 1);

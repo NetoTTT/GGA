@@ -364,6 +364,7 @@ private:
 	QThread* m_lanThread = nullptr;
 	bool m_lanActive = false;
 	bool m_lanSession = false;
+	bool m_lanDriverAttached = false;
 	qint64 m_lanJoinStartMs = 0;
 	QString m_lanError;
 #endif
