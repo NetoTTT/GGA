@@ -128,8 +128,9 @@ void LANConnector::detach() {
 }
 
 void LANConnector::updateStatus() {
-	if (m_controller && m_controller->pollHostSession()) {
-		// Session just started; status text below reflects it.
+	if (m_controller) {
+		m_controller->pollHostSession();
+		m_controller->pollClientAttach();
 	}
 	bool connected = m_controller && m_controller->isLANConnected();
 	bool hosting = m_controller && m_controller->isLANHosting();
@@ -156,6 +157,8 @@ void LANConnector::updateStatus() {
 		m_ui.status->setText(tr("Hosting on port %1: playing solo until P1 joins, then the session restarts together.").arg(m_ui.hostPort->value()));
 	} else if (connected) {
 		m_ui.status->setText(tr("Connected; waiting for the session to start."));
+	} else if (m_controller && !m_controller->lanError().isEmpty()) {
+		m_ui.status->setText(m_controller->lanError());
 	} else {
 		m_ui.status->setText(tr("Not connected."));
 	}

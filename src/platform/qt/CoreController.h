@@ -11,6 +11,7 @@
 #include <QMutex>
 #include <QObject>
 #include <QSize>
+#include <QThread>
 #include <QTimer>
 
 #include "VFileDevice.h"
@@ -221,7 +222,9 @@ public slots:
 	bool isLANConnected() const;
 	bool isLANHosting() const;
 	bool pollHostSession();
+	bool pollClientAttach();
 	bool isLANSessionActive() const;
+	QString lanError() const { return m_lanError; }
 	int lanSlot() const;
 	int lanRejectReason() const;
 #endif
@@ -260,6 +263,8 @@ signals:
 
 private:
 	void updateKeys();
+	void startLanWorker();
+	void stopLanWorker();
 	int updateAutofire();
 	void finishFrame();
 
@@ -356,9 +361,11 @@ private:
 	GBASIONetEndpoint m_lanEndpoint;
 	GBASIONetTransport m_lanTransport;
 	LANLockstepUser m_lanUser;
-	QTimer* m_lanPump = nullptr;
+	QThread* m_lanThread = nullptr;
 	bool m_lanActive = false;
 	bool m_lanSession = false;
+	qint64 m_lanJoinStartMs = 0;
+	QString m_lanError;
 #endif
 
 #ifdef ENABLE_DEBUGGERS

@@ -17,6 +17,7 @@
 #include <QFile>
 #include <QMessageBox>
 #include <QMutexLocker>
+#include <QStandardPaths>
 #include <QThread>
 
 #include <chrono>
@@ -466,6 +467,12 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 	if (m_lanActive) {
 		detachLAN();
 	}
+	m_lanError.clear();
+	m_lanJoinStartMs = 0;
+	// Mirror stderr to a file: GUI builds have no console, and the
+	// netplay traces are the only window into link issues.
+	QString logPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/lanplay.log");
+	freopen(logPath.toLocal8Bit().constData(), "w", stderr);
 	// ROM identity must match the peer: FNV-1a over the first 64 bytes,
 	// same layout as the headless link harness. Read from the loaded
 	// ROM image so archives (.zip) hash identically to flat dumps.
@@ -520,36 +527,73 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 			return false;
 		}
 	} else {
+		// Connect only; pollClientAttach() (dialog timer) completes
+		// the attach once WELCOME arrives, so the UI never blocks.
 		QByteArray hostBytes = address.toUtf8();
 		if (!GBASIONetEndpointConnect(&m_lanEndpoint, hostBytes.constData(), port)) {
 			detachLAN();
 			return false;
 		}
-		int spins = 0;
-		while (!m_lanEndpoint.welcomed && spins < 2000) {
-			GBASIONetEndpointPoll(&m_lanEndpoint);
-			QThread::msleep(5);
-			++spins;
-		}
-		if (!m_lanEndpoint.welcomed) {
-			detachLAN();
-			return false;
-		}
-		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
-		m_lanDriver.d.p = &gba->sio;
-		GBASIONetLinkAddPeer(&m_lanLink, 0);
-		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
-		m_lanDriver.d.reset(&m_lanDriver.d);
-		// Reboot so both sides start the session from identical states.
-		reset();
+		m_lanJoinStartMs = QDateTime::currentMSecsSinceEpoch();
+		m_lanError.clear();
 	}
 	m_lanActive = true;
-	if (!m_lanPump) {
-		m_lanPump = new QTimer(this);
-		connect(m_lanPump, &QTimer::timeout, this, &CoreController::pumpLAN);
-	}
-	m_lanPump->start(5);
+	startLanWorker();
 	return true;
+}
+
+void CoreController::startLanWorker() {
+#ifdef M_CORE_GBA
+	if (m_lanThread) {
+		return;
+	}
+	m_lanThread = new QThread(this);
+	QTimer* pump = new QTimer();
+	pump->setInterval(5);
+	pump->moveToThread(m_lanThread);
+	connect(m_lanThread, &QThread::started, pump, QOverload<>::of(&QTimer::start));
+	connect(pump, &QTimer::timeout, this, &CoreController::pumpLAN, Qt::DirectConnection);
+	connect(m_lanThread, &QThread::finished, pump, &QObject::deleteLater);
+	m_lanThread->start();
+#endif
+}
+
+void CoreController::stopLanWorker() {
+#ifdef M_CORE_GBA
+	if (!m_lanThread) {
+		return;
+	}
+	m_lanThread->quit();
+	m_lanThread->wait();
+	delete m_lanThread;
+	m_lanThread = nullptr;
+#endif
+}
+
+bool CoreController::pollClientAttach() {
+#ifdef M_CORE_GBA
+	if (!m_lanActive || m_lanLink.isHost || m_lanLink.localSlot >= 0) {
+		return false;
+	}
+	if (!m_lanEndpoint.welcomed) {
+		if (m_lanJoinStartMs > 0 && QDateTime::currentMSecsSinceEpoch() - m_lanJoinStartMs > 15000) {
+			m_lanError = tr("Join timed out waiting for WELCOME.");
+			detachLAN();
+		}
+		return false;
+	}
+	CoreController::Interrupter interrupter(this);
+	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+	GBASIONetLinkAddPeer(&m_lanLink, 0);
+	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+	m_lanDriver.d.reset(&m_lanDriver.d);
+	// Reboot so both sides start the session from identical states.
+	reset();
+	interrupter.resume();
+	return true;
+#else
+	return false;
+#endif
 }
 
 void CoreController::detachLAN() {
@@ -558,9 +602,7 @@ void CoreController::detachLAN() {
 	}
 	m_lanActive = false;
 	m_lanSession = false;
-	if (m_lanPump) {
-		m_lanPump->stop();
-	}
+	stopLanWorker();
 	if (platform() == mPLATFORM_GBA) {
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
 		GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
