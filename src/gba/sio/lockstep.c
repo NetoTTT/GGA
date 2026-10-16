@@ -718,6 +718,10 @@ void GBASIOLockstepCoordinatorAddProxy(struct GBASIOLockstepCoordinator* coordin
 void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator* coordinator, int targetPlayerId, int senderId,
 	int type, int32_t timestamp, int32_t arg) {
 	/* Caller must hold coordinator->mutex (same convention as _enqueueEvent). */
+	if (targetPlayerId < 0 || targetPlayerId >= MAX_GBAS) {
+		mLOG(GBA_SIO, WARN, "Dropping event for invalid player %i", targetPlayerId);
+		return;
+	}
 	struct GBASIOLockstepEvent event;
 	event.type = type;
 	event.playerId = senderId;
@@ -935,7 +939,14 @@ void _enqueueEvent(struct GBASIOLockstepCoordinator* coordinator, const struct G
 			continue;
 		}
 		struct GBASIOLockstepPlayer* player = TableLookup(&coordinator->players, coordinator->attachedPlayers[i]);
-		mASSERT_LOG(GBA_SIO, player->freeList, "No free events");
+		if (!player) {
+			mLOG(GBA_SIO, WARN, "Skipping event for missing player slot %i", i);
+			continue;
+		}
+		if (!player->freeList) {
+			mLOG(GBA_SIO, WARN, "Dropping event type %X: queue full (player %i)", event->type, i);
+			continue;
+		}
 		struct GBASIOLockstepEvent* newEvent = player->freeList;
 		player->freeList = newEvent->next;
 
