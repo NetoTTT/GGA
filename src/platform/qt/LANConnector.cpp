@@ -153,6 +153,11 @@ void LANConnector::updateStatus() {
 		} else {
 			m_ui.status->setText(tr("Client P1 connected to host P0."));
 		}
+		m_ui.status->setText(m_ui.status->text()
+			+ tr(" [n=%1 wait=0x%2 bp=%3]")
+				.arg(m_controller->lanAttached())
+				.arg(m_controller->lanWaiting(), 0, 16)
+				.arg(m_controller->lanBarrierPending() ? 1 : 0));
 	} else if (hosting) {
 		m_ui.status->setText(tr("Hosting on port %1: playing solo until P1 joins, then the session restarts together.").arg(m_ui.hostPort->value()));
 	} else if (connected) {

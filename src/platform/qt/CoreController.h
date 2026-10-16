@@ -225,6 +225,9 @@ public slots:
 	bool pollClientAttach();
 	bool isLANSessionActive() const;
 	QString lanError() const { return m_lanError; }
+	bool lanBarrierPending() const;
+	int lanWaiting() const;
+	int lanAttached() const;
 	int lanSlot() const;
 	int lanRejectReason() const;
 #endif

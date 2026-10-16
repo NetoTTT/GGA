@@ -612,10 +612,11 @@ bool CoreController::pollClientAttach() {
 		m_lanDriverAttached = true;
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
 		m_lanDriver.d.reset(&m_lanDriver.d);
-		GBASIONetLinkAddPeer(&m_lanLink, 0);
-		fprintf(stderr, "NET client peer added\n");
-		interrupter.resume();
+	GBASIONetLinkAddPeer(&m_lanLink, 0);
+	fprintf(stderr, "NET client peer added\n");
+	interrupter.resume();
 	}
+	m_lanSession = true;
 	return true;
 #else
 	return false;
@@ -719,6 +720,30 @@ int CoreController::lanSlot() const {
 int CoreController::lanRejectReason() const {
 #ifdef M_CORE_GBA
 	return m_lanEndpoint.rejectReason;
+#else
+	return 0;
+#endif
+}
+
+bool CoreController::lanBarrierPending() const {
+#ifdef M_CORE_GBA
+	return m_lanLink.barrierPending;
+#else
+	return false;
+#endif
+}
+
+int CoreController::lanWaiting() const {
+#ifdef M_CORE_GBA
+	return m_lanCoord.waiting;
+#else
+	return 0;
+#endif
+}
+
+int CoreController::lanAttached() const {
+#ifdef M_CORE_GBA
+	return m_lanCoord.nAttached;
 #else
 	return 0;
 #endif
