@@ -342,6 +342,22 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 		link->ackSeen = false;
 	}
 	_alignClock(link);
+	/* Heal stale parks: asleep is edge-triggered, so a park whose wake
+	 * was lost (unparked without PlayerWake, e.g. across a reboot)
+	 * neuters every future latch and spins the event loop. Asleep with
+	 * nothing outstanding (no wait mask, no transfer) is stale by
+	 * definition: clear it and wake. Legit parks always have a pending
+	 * condition and are untouched. */
+	if (!link->coordinator->transferActive && link->coordinator->waiting == 0) {
+		struct GBASIOLockstepPlayer* local = TableLookup(
+			&link->coordinator->players, link->realDriver->lockstepId);
+		if (local && local->asleep) {
+			local->asleep = false;
+			if (link->chainedUser && link->chainedUser->wake) {
+				link->chainedUser->wake(link->chainedUser);
+			}
+		}
+	}
 	_enforceStall(link);
 	MutexUnlock(&link->coordinator->mutex);
 }
