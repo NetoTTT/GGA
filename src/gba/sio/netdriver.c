@@ -278,7 +278,9 @@ static void _alignClock(struct GBASIONetLink* link) {
 		return;
 	}
 	int32_t now = _localNow(link);
-	link->coordinator->cycle = now;
+	/* Lead by one lockstep interval so the base reschedule lands at the
+	 * designed rate instead of refiring every tick (base ~0). */
+	link->coordinator->cycle = now + 4096;
 	player->cycleOffset = mTimingCurrentTime(&link->realDriver->d.p->p->timing) - now;
 }
 
@@ -475,7 +477,8 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
  * drains, sleeps never happen and the event loop spins. */
 void GBASIONetLinkResetClock(struct GBASIONetLink* link) {
 	MutexLock(&link->coordinator->mutex);
-	link->coordinator->cycle = _localNow(link);
+	/* Lead by one lockstep interval (see _alignClock). */
+	link->coordinator->cycle = _localNow(link) + 4096;
 	MutexUnlock(&link->coordinator->mutex);
 }
 

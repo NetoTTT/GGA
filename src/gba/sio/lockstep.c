@@ -1090,6 +1090,13 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 	}
 	MutexUnlock(&coordinator->mutex);
 
+	/* GGA: never reschedule in the past. A non-positive delay refires
+	 * inside the same tick while its head stays future-dated, hanging
+	 * the tick (and the core with it) instead of letting time advance
+	 * to the head. Upstream only clamped the sleep path; clamp all. */
+	if (nextEvent < 1) {
+		nextEvent = 1;
+	}
 	mASSERT_DEBUG(nextEvent > 0);
 	mTimingSchedule(timing, &lockstep->event, nextEvent);
 }
