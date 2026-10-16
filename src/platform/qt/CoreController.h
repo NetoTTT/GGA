@@ -219,6 +219,9 @@ public slots:
 	bool attachLAN(bool isHost, const QString& address, int port);
 	void detachLAN();
 	bool isLANConnected() const;
+	bool isLANHosting() const;
+	bool pollHostSession();
+	bool isLANSessionActive() const;
 	int lanSlot() const;
 	int lanRejectReason() const;
 #endif
@@ -355,6 +358,7 @@ private:
 	LANLockstepUser m_lanUser;
 	QTimer* m_lanPump = nullptr;
 	bool m_lanActive = false;
+	bool m_lanSession = false;
 #endif
 
 #ifdef ENABLE_DEBUGGERS

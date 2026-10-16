@@ -335,9 +335,17 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
 			SIO_EV_ATTACH, now, 0);
 		/* Attach is a barrier too: the peer must observe us before
-		 * either side proceeds, otherwise both park forever. */
+		 * either side proceeds, otherwise both park forever. Unlike
+		 * data barriers, attach carries no payload, so ack it
+		 * immediately instead of waiting for our thread to latch:
+		 * a freely-running peer would otherwise never ack and the
+		 * other side would starve. */
 		link->barrierPending = true;
 		link->ackSeen = false;
+		if (link->transport.send) {
+			link->transport.send(link->transport.context, 0,
+				GGA_NETW_ACK, link->localSlot, 0, 0, 0);
+		}
 		break;
 	case GGA_NET_EV_DETACH:
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
@@ -373,9 +381,10 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 	default:
 		break;
 	}
-	if (kind >= GGA_NET_EV_TRANSFER_START && kind <= GGA_NET_EV_DETACH) {
+	if (!link->isHost && kind >= GGA_NET_EV_TRANSFER_START && kind <= GGA_NET_EV_DETACH) {
 		/* Wake our thread so it processes the injected event. Without
-		 * this, an idled secondary never runs to ack. */
+		 * this, an idled secondary never runs to ack. The host primary
+		 * must only leave a coordinator barrier when its ACK arrives. */
 		if (link->chainedUser && link->chainedUser->wake) {
 			link->chainedUser->wake(link->chainedUser);
 		}

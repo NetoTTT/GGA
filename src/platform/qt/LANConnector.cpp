@@ -7,6 +7,10 @@
 #include "moc_LANConnector.cpp"
 
 #include <QMessageBox>
+#include <QAbstractSocket>
+#include <QNetworkAddressEntry>
+#include <QNetworkInterface>
+#include <QStringList>
 
 #include "CoreController.h"
 #include "Window.h"
@@ -23,8 +27,33 @@ LANConnector::LANConnector(Window* window, QWidget* parent)
 	connect(m_ui.host, &QAbstractButton::clicked, this, &LANConnector::host);
 	connect(m_ui.join, &QAbstractButton::clicked, this, &LANConnector::join);
 	connect(m_ui.disconnect, &QAbstractButton::clicked, this, &LANConnector::detach);
+	connect(&m_statusTimer, &QTimer::timeout, this, &LANConnector::updateStatus);
+	m_statusTimer.start(1000);
 
 	updateStatus();
+}
+
+static QString hostAddresses() {
+	QStringList addresses;
+	for (const QNetworkInterface& interface : QNetworkInterface::allInterfaces()) {
+		const auto flags = interface.flags();
+		if (!flags.testFlag(QNetworkInterface::IsUp) || !flags.testFlag(QNetworkInterface::IsRunning)
+		    || flags.testFlag(QNetworkInterface::IsLoopBack)) {
+			continue;
+		}
+		for (const QNetworkAddressEntry& entry : interface.addressEntries()) {
+			const QHostAddress& address = entry.ip();
+			if (address.protocol() != QAbstractSocket::IPv4Protocol || address.isLoopback()
+			    || address.isMulticast() || address.toIPv4Address() == 0) {
+				continue;
+			}
+			addresses.append(QStringLiteral("%1: %2").arg(interface.humanReadableName(), address.toString()));
+		}
+	}
+	if (addresses.isEmpty()) {
+		return QObject::tr("No active IPv4 addresses found.");
+	}
+	return addresses.join(QLatin1Char('\n'));
 }
 
 static CoreController* needController(Window* window) {
@@ -99,15 +128,34 @@ void LANConnector::detach() {
 }
 
 void LANConnector::updateStatus() {
+	if (m_controller && m_controller->pollHostSession()) {
+		// Session just started; status text below reflects it.
+	}
 	bool connected = m_controller && m_controller->isLANConnected();
-	m_ui.host->setDisabled(connected);
-	m_ui.join->setDisabled(connected);
-	m_ui.hostPort->setDisabled(connected);
-	m_ui.joinAddr->setDisabled(connected);
-	m_ui.joinPort->setDisabled(connected);
-	m_ui.disconnect->setEnabled(connected);
-	if (connected) {
-		m_ui.status->setText(tr("Connected (slot %1).").arg(m_controller->lanSlot()));
+	bool hosting = m_controller && m_controller->isLANHosting();
+	bool session = m_controller && m_controller->isLANSessionActive();
+	bool active = connected || hosting;
+	m_ui.host->setDisabled(active);
+	m_ui.join->setDisabled(active);
+	m_ui.hostPort->setDisabled(active);
+	m_ui.joinAddr->setDisabled(active);
+	m_ui.joinPort->setDisabled(active);
+	m_ui.disconnect->setEnabled(active);
+	m_ui.clientCount->setText(tr("Remote clients: %1 / 1").arg(session && hosting ? 1 : 0));
+	QString addresses = hostAddresses();
+	if (m_ui.hostAddresses->toPlainText() != addresses) {
+		m_ui.hostAddresses->setPlainText(addresses);
+	}
+	if (connected && session) {
+		if (m_controller->lanSlot() == 0) {
+			m_ui.status->setText(tr("Host P0 connected to client P1."));
+		} else {
+			m_ui.status->setText(tr("Client P1 connected to host P0."));
+		}
+	} else if (hosting) {
+		m_ui.status->setText(tr("Hosting on port %1: playing solo until P1 joins, then the session restarts together.").arg(m_ui.hostPort->value()));
+	} else if (connected) {
+		m_ui.status->setText(tr("Connected; waiting for the session to start."));
 	} else {
 		m_ui.status->setText(tr("Not connected."));
 	}

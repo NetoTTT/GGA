@@ -509,16 +509,16 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 	GBASIONetEndpointInit(&m_lanEndpoint, &m_lanLink, &m_lanTransport);
 	GBASIONetEndpointSetIdentity(&m_lanEndpoint, romHash, isHost ? "P0" : "P1");
 	if (isHost) {
+		// Listen-only for now: the game keeps running solo (visible)
+		// until a client knocks. pollHostSession() starts the linked
+		// session (attach + reset) when the HELLO arrives, so both
+		// sides reboot from identical states.
 		m_lanLink.assignedSlot = 0;
 		m_lanLink.isHost = true;
 		if (!GBASIONetEndpointListen(&m_lanEndpoint, port)) {
 			detachLAN();
 			return false;
 		}
-		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
-		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
-		m_lanDriver.d.reset(&m_lanDriver.d);
-		GBASIONetLinkAddPeer(&m_lanLink, 1);
 	} else {
 		QByteArray hostBytes = address.toUtf8();
 		if (!GBASIONetEndpointConnect(&m_lanEndpoint, hostBytes.constData(), port)) {
@@ -536,9 +536,12 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 			return false;
 		}
 		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+		m_lanDriver.d.p = &gba->sio;
+		GBASIONetLinkAddPeer(&m_lanLink, 0);
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
 		m_lanDriver.d.reset(&m_lanDriver.d);
-		GBASIONetLinkAddPeer(&m_lanLink, 0);
+		// Reboot so both sides start the session from identical states.
+		reset();
 	}
 	m_lanActive = true;
 	if (!m_lanPump) {
@@ -554,6 +557,7 @@ void CoreController::detachLAN() {
 		return;
 	}
 	m_lanActive = false;
+	m_lanSession = false;
 	if (m_lanPump) {
 		m_lanPump->stop();
 	}
@@ -569,6 +573,46 @@ void CoreController::detachLAN() {
 bool CoreController::isLANConnected() const {
 #ifdef M_CORE_GBA
 	return m_lanActive && !SOCKET_FAILED(m_lanEndpoint.conn);
+#else
+	return false;
+#endif
+}
+
+bool CoreController::isLANSessionActive() const {
+#ifdef M_CORE_GBA
+	return m_lanSession;
+#else
+	return false;
+#endif
+}
+
+bool CoreController::pollHostSession() {
+#ifdef M_CORE_GBA
+	if (!m_lanActive || !m_lanLink.isHost || m_lanSession) {
+		return false;
+	}
+	if (!m_lanEndpoint.peerHello) {
+		return false;
+	}
+	// A client knocked: attach the link, reboot into it, and start
+	// the session from identical states on both sides.
+	CoreController::Interrupter interrupter(this);
+	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+	m_lanDriver.d.reset(&m_lanDriver.d);
+	GBASIONetLinkAddPeer(&m_lanLink, 1);
+	reset();
+	interrupter.resume();
+	m_lanSession = true;
+	return true;
+#else
+	return false;
+#endif
+}
+
+bool CoreController::isLANHosting() const {
+#ifdef M_CORE_GBA
+	return m_lanActive && m_lanLink.isHost && !SOCKET_FAILED(m_lanEndpoint.listenSock);
 #else
 	return false;
 #endif

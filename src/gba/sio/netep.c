@@ -316,6 +316,7 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 			uint8_t w[5] = { 1, 0, 0, 0, 0 };
 			GGANetStoreI32(&w[1], 0);
 			GGANetSendFrame(ep->conn, 0x11, w, sizeof(w));
+			ep->peerHello = true;
 		}
 		break;
 	}
