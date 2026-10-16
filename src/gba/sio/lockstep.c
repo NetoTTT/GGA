@@ -1055,6 +1055,10 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 			}
 			_setReady(coordinator, player, event->playerId, event->mode);
 			if (event->playerId == 0) {
+				/* Player 0 is the global mode authority: adopt it so
+				 * split coordinators agree on transferMode (locally
+				 * this is already the case, hence a no-op there). */
+				coordinator->transferMode = event->mode;
 				GBASIOLockstepCoordinatorAckPlayer(coordinator, player);
 			}
 			break;
