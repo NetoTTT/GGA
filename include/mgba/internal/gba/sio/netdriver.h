@@ -25,7 +25,7 @@
 CXX_GUARD_START
 
 #define GGA_NET_MAX_PEERS 3
-#define GGA_NET_STALL_BUDGET_MS 2000 /* TEMP experiment: is the peer just slow? */
+#define GGA_NET_STALL_BUDGET_MS 100
 
 enum GGANetEventKind {
 	GGA_NET_EV_TRANSFER_START = 1,
@@ -73,9 +73,12 @@ struct GBASIONetLink {
 	int64_t transferStartMs;
 	bool transferSeen;
 	/* Remote contribution tracking: transferPending set when a
-	 * TRANSFER_START is injected; ackSeen set when our thread sleeps
-	 * afterwards (= data latched). Send once, then clear both. */
+	 * TRANSFER_START is injected, with its timestamp. The transfer
+	 * path latches inline (no thread sleep), so ship once the event
+	 * is consumed from our queue (= data latched). Send once, then
+	 * clear. */
 	bool transferPending;
+	int32_t pendingTransferTs;
 	bool ackSeen;
 	/* Barrier ack tracking (ATTACH/HARD_SYNC/MODE_SET): set at inject,
 	 * sent once our thread acks locally. */

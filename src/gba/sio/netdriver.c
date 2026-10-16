@@ -294,23 +294,42 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 		}
 		link->transferSeen = false;
 	}
-	if (!link->isHost && link->transferPending && link->ackSeen) {
-		/* Our thread latched its slot: ship the contribution. */
-		uint32_t v = (link->coordinator->transferMode == GBA_SIO_MULTI)
-			? link->coordinator->multiData[link->localSlot]
-			: link->coordinator->normalData[link->localSlot];
-		uint8_t pay[5];
-		pay[0] = (uint8_t) link->localSlot;
-		pay[1] = v & 0xFF;
-		pay[2] = (v >> 8) & 0xFF;
-		pay[3] = (v >> 16) & 0xFF;
-		pay[4] = (v >> 24) & 0xFF;
-		if (link->transport.send) {
-			link->transport.send(link->transport.context, 0,
-				GGA_NETW_TRANSFER_DATA, 0, 0, pay, sizeof(pay));
+	if (!link->isHost && link->transferPending) {
+		/* Ship once our thread consumed the injected TRANSFER_START
+		 * (= contribution latched; the transfer path latches inline
+		 * without sleeping, so ackSeen never applies here). */
+		bool consumed = true;
+		struct GBASIOLockstepPlayer* local = TableLookup(
+			&link->coordinator->players, link->realDriver->lockstepId);
+		if (local) {
+			struct GBASIOLockstepEvent* ev;
+			for (ev = local->queue; ev; ev = ev->next) {
+				if (ev->type == SIO_EV_TRANSFER_START && ev->timestamp == link->pendingTransferTs) {
+					consumed = false;
+					break;
+				}
+			}
+		} else {
+			consumed = false;
 		}
-		link->transferPending = false;
-		link->ackSeen = false;
+		if (consumed) {
+			/* Latched: ship it. */
+			uint32_t v = (link->coordinator->transferMode == GBA_SIO_MULTI)
+				? link->coordinator->multiData[link->localSlot]
+				: link->coordinator->normalData[link->localSlot];
+			uint8_t pay[5];
+			pay[0] = (uint8_t) link->localSlot;
+			pay[1] = v & 0xFF;
+			pay[2] = (v >> 8) & 0xFF;
+			pay[3] = (v >> 16) & 0xFF;
+			pay[4] = (v >> 24) & 0xFF;
+			if (link->transport.send) {
+				link->transport.send(link->transport.context, 0,
+					GGA_NETW_TRANSFER_DATA, 0, 0, pay, sizeof(pay));
+			}
+			link->transferPending = false;
+			link->ackSeen = false;
+		}
 	}
 	if (!link->isHost && link->barrierPending && link->ackSeen) {
 		if (link->transport.send) {
@@ -343,6 +362,7 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 		GBASIOLockstepProxyEnqueue(link->coordinator, link->localSlot, senderSlot,
 			SIO_EV_TRANSFER_START, now, finish);
 		link->transferPending = true;
+		link->pendingTransferTs = now;
 		link->ackSeen = false;
 		break;
 	}
