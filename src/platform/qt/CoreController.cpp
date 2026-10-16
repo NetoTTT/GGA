@@ -586,21 +586,36 @@ bool CoreController::pollClientAttach() {
 		}
 		return false;
 	}
-	CoreController::Interrupter interrupter(this);
-	fprintf(stderr, "NET client attach\n");
-	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
-	m_lanDriverAttached = true;
-	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
-	m_lanDriver.d.reset(&m_lanDriver.d);
-	GBASIONetLinkAddPeer(&m_lanLink, 0);
-	fprintf(stderr, "NET client peer added\n");
-	// Reboot so both sides start the session from identical states.
-	// Unpark first: a core parked in a lockstep WAIT never processes
-	// the reset request (the runloop only honors it while running).
-	mCoreThreadStopWaiting(thread());
+	// Session start, in an order that can never hang:
+	//  1. detach any previous link (re-join safe) while paused;
+	//  2. unpark (a barrier-parked core ignores reset);
+	//  3. resume and reboot on the RUNNING core (reset under pause
+	//     never completes: the runloop only honors it while running);
+	//  4. attach fresh (both sides reboot within ms of each other,
+	//     close enough for barrier sync).
+	{
+		CoreController::Interrupter interrupter(this);
+		fprintf(stderr, "NET client attach\n");
+		if (m_lanDriverAttached) {
+			m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
+			GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
+			m_lanDriverAttached = false;
+		}
+		mCoreThreadStopWaiting(thread());
+		interrupter.resume();
+	}
 	reset();
 	fprintf(stderr, "NET client reset done\n");
-	interrupter.resume();
+	{
+		CoreController::Interrupter interrupter(this);
+		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+		m_lanDriverAttached = true;
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+		m_lanDriver.d.reset(&m_lanDriver.d);
+		GBASIONetLinkAddPeer(&m_lanLink, 0);
+		fprintf(stderr, "NET client peer added\n");
+		interrupter.resume();
+	}
 	return true;
 #else
 	return false;
@@ -650,25 +665,35 @@ bool CoreController::pollHostSession() {
 	if (!m_lanEndpoint.peerHello) {
 		return false;
 	}
-	// A client knocked: attach the link, reboot into it, and start
-	// the session from identical states on both sides.
-	CoreController::Interrupter interrupter(this);
-	fprintf(stderr, "NET host session start\n");
-	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
-	m_lanDriverAttached = true;
-	// setPeripheral binds d.p; AddPeer copies it into the proxy, so
-	// this must come first (a NULL sio crashes the session later).
-	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
-	m_lanDriver.d.reset(&m_lanDriver.d);
-	GBASIONetLinkAddPeer(&m_lanLink, 1);
-	fprintf(stderr, "NET host peer added\n");
-	// Reboot so both sides start the session from identical states.
-	// Unpark first: a core parked in a lockstep WAIT never processes
-	// the reset request (the runloop only honors it while running).
-	mCoreThreadStopWaiting(thread());
+	// A client knocked: reboot on the running core, then attach fresh.
+	// (Reset under pause never completes; attach-then-reset parks the
+	// core where the reset can't land. See pollClientAttach.)
+	{
+		CoreController::Interrupter interrupter(this);
+		fprintf(stderr, "NET host session start\n");
+		if (m_lanDriverAttached) {
+			m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
+			GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
+			m_lanDriverAttached = false;
+		}
+		mCoreThreadStopWaiting(thread());
+		interrupter.resume();
+	}
 	reset();
 	fprintf(stderr, "NET host reset done\n");
-	interrupter.resume();
+	{
+		CoreController::Interrupter interrupter(this);
+		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+		m_lanDriverAttached = true;
+		// setPeripheral binds d.p; AddPeer copies it into the proxy, so
+		// this must come first (a NULL sio crashes the session later).
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
+		m_lanDriver.d.reset(&m_lanDriver.d);
+		GBASIONetLinkAddPeer(&m_lanLink, 1);
+		fprintf(stderr, "NET host peer added\n");
+		interrupter.resume();
+	}
+	m_lanSession = true;
 	return true;
 #else
 	return false;
