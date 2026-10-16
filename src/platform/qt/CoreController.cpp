@@ -474,7 +474,9 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 	// and the netplay traces are the only window into link issues.
 	QString logPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
 		+ QStringLiteral("/lanplay-%1.log").arg(QCoreApplication::applicationPid());
-	freopen(logPath.toLocal8Bit().constData(), "w", stderr);
+	if (freopen(logPath.toLocal8Bit().constData(), "w", stderr)) {
+		setvbuf(stderr, nullptr, _IONBF, 0);
+	}
 	// ROM identity must match the peer: FNV-1a over the first 64 bytes,
 	// same layout as the headless link harness. Read from the loaded
 	// ROM image so archives (.zip) hash identically to flat dumps.
@@ -585,13 +587,16 @@ bool CoreController::pollClientAttach() {
 		return false;
 	}
 	CoreController::Interrupter interrupter(this);
+	fprintf(stderr, "NET client attach\n");
 	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
 	m_lanDriverAttached = true;
-	GBASIONetLinkAddPeer(&m_lanLink, 0);
 	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
 	m_lanDriver.d.reset(&m_lanDriver.d);
+	GBASIONetLinkAddPeer(&m_lanLink, 0);
+	fprintf(stderr, "NET client peer added\n");
 	// Reboot so both sides start the session from identical states.
 	reset();
+	fprintf(stderr, "NET client reset done\n");
 	interrupter.resume();
 	return true;
 #else
@@ -645,14 +650,18 @@ bool CoreController::pollHostSession() {
 	// A client knocked: attach the link, reboot into it, and start
 	// the session from identical states on both sides.
 	CoreController::Interrupter interrupter(this);
+	fprintf(stderr, "NET host session start\n");
 	GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
+	m_lanDriverAttached = true;
 	// setPeripheral binds d.p; AddPeer copies it into the proxy, so
 	// this must come first (a NULL sio crashes the session later).
 	m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, &m_lanDriver.d);
 	m_lanDriver.d.reset(&m_lanDriver.d);
-	GBASIONetLinkAddPeer(&m_lanLink, 0);
+	GBASIONetLinkAddPeer(&m_lanLink, 1);
+	fprintf(stderr, "NET host peer added\n");
 	// Reboot so both sides start the session from identical states.
 	reset();
+	fprintf(stderr, "NET host reset done\n");
 	interrupter.resume();
 	return true;
 #else
