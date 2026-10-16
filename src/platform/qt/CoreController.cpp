@@ -595,6 +595,9 @@ bool CoreController::pollClientAttach() {
 	GBASIONetLinkAddPeer(&m_lanLink, 0);
 	fprintf(stderr, "NET client peer added\n");
 	// Reboot so both sides start the session from identical states.
+	// Unpark first: a core parked in a lockstep WAIT never processes
+	// the reset request (the runloop only honors it while running).
+	mCoreThreadStopWaiting(thread());
 	reset();
 	fprintf(stderr, "NET client reset done\n");
 	interrupter.resume();
@@ -660,6 +663,9 @@ bool CoreController::pollHostSession() {
 	GBASIONetLinkAddPeer(&m_lanLink, 1);
 	fprintf(stderr, "NET host peer added\n");
 	// Reboot so both sides start the session from identical states.
+	// Unpark first: a core parked in a lockstep WAIT never processes
+	// the reset request (the runloop only honors it while running).
+	mCoreThreadStopWaiting(thread());
 	reset();
 	fprintf(stderr, "NET host reset done\n");
 	interrupter.resume();
