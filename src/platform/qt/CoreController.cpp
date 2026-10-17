@@ -27,6 +27,7 @@
 #include <mgba/feature/video-logger.h>
 #ifdef M_CORE_GBA
 #include <mgba/internal/gba/gba.h>
+#include <mgba/gba/core.h>
 #include <mgba/internal/gba/renderers/cache-set.h>
 #include <mgba/internal/gba/sharkport.h>
 #endif
@@ -147,12 +148,24 @@ CoreController::CoreController(mCore* core, QObject* parent)
 	m_threadContext.pauseCallback = [](mCoreThread* context) {
 		CoreController* controller = static_cast<CoreController*>(context->userData);
 
+#ifdef M_CORE_GBA
+		// v2 pauses the core thread itself to hand it to the runner; that
+		// is not a user pause and must not reach the UI.
+		if (controller->m_lan2Running) {
+			return;
+		}
+#endif
 		QMetaObject::invokeMethod(controller, "paused");
 	};
 
 	m_threadContext.unpauseCallback = [](mCoreThread* context) {
 		CoreController* controller = static_cast<CoreController*>(context->userData);
 
+#ifdef M_CORE_GBA
+		if (controller->m_lan2Running) {
+			return;
+		}
+#endif
 		QMetaObject::invokeMethod(controller, "unpaused");
 	};
 
@@ -276,6 +289,13 @@ QImage CoreController::getPixels() {
 }
 
 bool CoreController::isPaused() {
+#ifdef M_CORE_GBA
+	// In v2 the core thread is always paused (the runner steps the core),
+	// so the user-visible pause state is tracked separately.
+	if (m_lan2Running) {
+		return m_lan2Paused;
+	}
+#endif
 	return mCoreThreadIsPaused(&m_threadContext);
 }
 
@@ -503,6 +523,10 @@ void CoreController::installLANRtc(int64_t epochMs) {
 
 void CoreController::pumpLAN() {
 #ifdef M_CORE_GBA
+	if (m_lan2Active) {
+		pumpLAN2();
+		return;
+	}
 	if (m_lanActive) {
 		GBASIONetEndpointPoll(&m_lanEndpoint);
 	}
@@ -702,6 +726,258 @@ void CoreController::detachLAN() {
 	GBASIONetEndpointClose(&m_lanEndpoint);
 }
 
+/* v2 deterministic input netplay: both players run in this process under
+ * GBASIONetRunner and only key masks cross the wire, so the link is exact by
+ * construction instead of relying on in-flight SIO to line up. mCoreThread is
+ * paused for the local core (the runner steps it) and resumes on detach. */
+time_t CoreController::transportRtcFixed(struct mRTCSource* source) {
+	auto* rtc = reinterpret_cast<LAN2RtcSource*>(source);
+	return static_cast<time_t>(rtc->epochMs / 1000);
+}
+
+void CoreController::transportGetRtcSeed2(void* context, int64_t* epochMs) {
+	CoreController* self = lanOwner(context);
+	*epochMs = self ? self->m_lan2Rtc.epochMs : 0;
+}
+
+void CoreController::transportLoadRtcSeed2(void* context, int64_t epochMs) {
+	CoreController* self = lanOwner(context);
+	if (self) {
+		self->m_lan2Rtc.epochMs = epochMs;
+		self->installLAN2Rtc();
+	}
+}
+
+void CoreController::installLAN2Rtc() {
+	if (platform() != mPLATFORM_GBA) {
+		return;
+	}
+	Interrupter interrupter(this);
+	m_lan2Rtc.sample = nullptr;
+	m_lan2Rtc.unixTime = &CoreController::transportRtcFixed;
+	m_lan2Rtc.serialize = nullptr;
+	m_lan2Rtc.deserialize = nullptr;
+	GBA* local = static_cast<GBA*>(m_threadContext.core->board);
+	if (local) {
+		local->memory.hw.rtc.offset = 0;
+		local->rtcSource = &m_lan2Rtc;
+	}
+	if (m_lan2Peer) {
+		GBA* peer = static_cast<GBA*>(m_lan2Peer->board);
+		if (peer) {
+			peer->memory.hw.rtc.offset = 0;
+			peer->rtcSource = &m_lan2Rtc;
+		}
+	}
+}
+
+bool CoreController::attachLAN2(bool isHost, const QString& address, int port) {
+	if (platform() != mPLATFORM_GBA) {
+		return false;
+	}
+	if (m_lanActive) {
+		detachLAN();
+	}
+	if (m_lan2Active) {
+		detachLAN2();
+	}
+	m_lanError.clear();
+
+	GBA* local = static_cast<GBA*>(m_threadContext.core->board);
+	if (!local || !local->memory.rom || !local->memory.romSize) {
+		m_lanError = tr("No ROM is loaded.");
+		return false;
+	}
+
+	// A second GBA built from the image that is actually running here
+	// (patches and all), so both players boot byte for byte identical and
+	// input-only sync holds. The peer is stepped by the runner, never by a
+	// thread of its own.
+	mCore* peer = GBACoreCreate();
+	if (!peer) {
+		m_lanError = tr("Could not create a second core.");
+		return false;
+	}
+	peer->init(peer);
+	mCoreInitConfig(peer, nullptr);
+	if (local->memory.bios) {
+		VFile* biosVf = VFileFromConstMemory(local->memory.bios, 0x4000);
+		if (biosVf) {
+			peer->loadBIOS(peer, biosVf, 0);
+		}
+	}
+	VFile* romVf = VFileFromConstMemory(local->memory.rom, local->memory.romSize);
+	if (!romVf || !peer->loadROM(peer, romVf)) {
+		mCoreConfigDeinit(&peer->config);
+		peer->deinit(peer);
+		m_lanError = tr("Could not mirror the running ROM into the second core.");
+		return false;
+	}
+	peer->reset(peer);
+	m_lan2Peer = peer;
+
+	uint8_t localSlot = isHost ? 0 : 1;
+	uint8_t peerSlot = isHost ? 1 : 0;
+
+	GBASIONetRunnerInit(&m_lan2Runner, 2, &m_lan2State);
+	m_lan2RunnerReady = true;
+	// The cores are not attached to the runner until the peer shows up:
+	// while waiting, the local core keeps playing solo with no link port.
+	// (Attaching early would park it on the first transfer with no peer.)
+	{
+		Interrupter interrupter(this);
+		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
+	}
+
+	GBASIONetSessionInit(&m_lan2State, isHost ? GGA_NET_SESSION_HOST : GGA_NET_SESSION_GUEST,
+		localSlot, 2, lanNowMs, this);
+
+	memset(&m_lan2Transport, 0, sizeof(m_lan2Transport));
+	m_lan2Transport.nowMs = lanNowMs;
+	m_lan2Transport.getRtcSeed = CoreController::transportGetRtcSeed2;
+	m_lan2Transport.loadRtcSeed = CoreController::transportLoadRtcSeed2;
+
+	// The link layer is inert in v2 (the session carries the messages), but
+	// the endpoint still wants one to talk to.
+	GBASIOLockstepCoordinatorInit(&m_lan2LinkCoord);
+	GBASIOLockstepDriverCreate(&m_lan2LinkDriver, nullptr);
+	GBASIONetLinkInit(&m_lan2Link, &m_lan2LinkCoord, &m_lan2LinkDriver, nullptr);
+	m_lan2Link.assignedSlot = localSlot;
+	m_lan2Link.isHost = isHost;
+	m_lan2Link.localSlot = -1;
+	GBASIONetEndpointInit(&m_lan2Endpoint, &m_lan2Link, &m_lan2Transport);
+	m_lan2Endpoint.userdata = this;
+
+	m_lan2Rtc.epochMs = QDateTime::currentMSecsSinceEpoch();
+	installLAN2Rtc();
+
+	m_lan2Host = isHost;
+	m_lan2Frame = 0;
+	m_lan2Active = true;
+
+	if (isHost) {
+		if (!GBASIONetEndpointListen(&m_lan2Endpoint, port)) {
+			m_lanError = tr("Could not listen on port %1.").arg(port);
+			detachLAN2();
+			return false;
+		}
+	} else {
+		QByteArray hostBytes = address.toUtf8();
+		if (!GBASIONetEndpointConnect(&m_lan2Endpoint, hostBytes.constData(), port)) {
+			m_lanError = tr("Could not reach %1:%2.").arg(address).arg(port);
+			detachLAN2();
+			return false;
+		}
+	}
+	startLanWorker();
+	return true;
+}
+
+void CoreController::startLAN2Session() {
+	if (m_lan2Running || !m_lan2Active || !m_lan2Peer) {
+		return;
+	}
+	// The runner takes the local core from here, so pause its thread first:
+	// it must not run a transfer while the link is being set up. m_lan2Running
+	// is set beforehand so this internal pause never reaches the UI.
+	m_lan2Running = true;
+	m_lan2Paused = false;
+	mCoreThreadPause(&m_threadContext);
+
+	// Both cores reboot together on a clean state, and only now get bound to
+	// the runner: attaching earlier would park the core during solo play.
+	const QSize size = screenDimensions();
+	m_threadContext.core->reset(m_threadContext.core);
+	m_lan2Peer->reset(m_lan2Peer);
+	m_threadContext.core->setVideoBuffer(m_threadContext.core,
+		reinterpret_cast<mColor*>(m_activeBuffer.data()), size.width());
+	m_frameCounter = 0;
+	uint8_t localSlot = m_lan2Host ? 0 : 1;
+	uint8_t peerSlot = m_lan2Host ? 1 : 0;
+	if (!GBASIONetRunnerAddCore(&m_lan2Runner, localSlot, m_threadContext.core) ||
+			!GBASIONetRunnerAddCore(&m_lan2Runner, peerSlot, m_lan2Peer)) {
+		m_lan2Active = false;
+		emit statusPosted(tr("Could not attach both cores to the link runner."));
+		return;
+	}
+	if (!m_lan2Host) {
+		GBASIONetSessionStart(&m_lan2State);
+	}
+	m_lan2LastFrameMs = lanNowMs(nullptr);
+	emit statusPosted(tr("Link established (v2 input sync)."));
+}
+
+void CoreController::pumpLAN2() {
+	if (!m_lan2Active) {
+		return;
+	}
+	GBASIONetEndpointPoll(&m_lan2Endpoint);
+	if (!m_lan2Running) {
+		bool ready = m_lan2Host ? m_lan2Endpoint.peerHello : m_lan2Endpoint.welcomed;
+		if (ready) {
+			startLAN2Session();
+		}
+		return;
+	}
+	// Pace the simulation to real time; the whole point of v2 is that the
+	// network never gates the frame rate.
+	if (m_lan2Paused) {
+		return;
+	}
+	int64_t now = lanNowMs(nullptr);
+	if (now - m_lan2LastFrameMs < 16) {
+		return;
+	}
+	m_lan2LastFrameMs = now;
+	GBASIONetSessionSetLocalInput(&m_lan2State,
+		static_cast<uint16_t>(m_threadContext.core->getKeys(m_threadContext.core)));
+	if (GBASIONetRunnerStep(&m_lan2Runner, 0)) {
+		finishFrame();
+		++m_lan2Frame;
+	}
+	if (GBASIONetSessionEnded(&m_lan2State)) {
+		emit statusPosted(tr("Link session ended (%1).").arg(GBASIONetSessionEndReason(&m_lan2State)));
+	}
+}
+
+void CoreController::detachLAN2() {
+	if (!m_lan2Active && !m_lan2Peer && !m_lan2RunnerReady) {
+		return;
+	}
+	m_lan2Active = false;
+	stopLanWorker();
+	if (m_lan2RunnerReady) {
+		Interrupter interrupter(this);
+		// Unpause while m_lan2Running is still set so the signal stays
+		// internal, then hand the core back to mCoreThread.
+		mCoreThreadUnpause(&m_threadContext);
+		GBASIONetRunnerDeinit(&m_lan2Runner);
+		m_lan2RunnerReady = false;
+	}
+	m_lan2Running = false;
+	m_lan2Paused = false;
+	GBASIONetEndpointClose(&m_lan2Endpoint);
+	GBASIONetLinkDeinit(&m_lan2Link);
+	GBASIOLockstepCoordinatorDeinit(&m_lan2LinkCoord);
+	if (m_lan2Peer) {
+		GBA* peer = static_cast<GBA*>(m_lan2Peer->board);
+		if (peer && peer->rtcSource == &m_lan2Rtc) {
+			peer->rtcSource = nullptr;
+		}
+		m_lan2Peer->setPeripheral(m_lan2Peer, mPERIPH_GBA_LINK_PORT, nullptr);
+		mCoreConfigDeinit(&m_lan2Peer->config);
+		m_lan2Peer->deinit(m_lan2Peer);
+		m_lan2Peer = nullptr;
+	}
+	GBA* local = static_cast<GBA*>(m_threadContext.core->board);
+	if (local && local->rtcSource == &m_lan2Rtc) {
+		Interrupter interrupter(this);
+		local->rtcSource = nullptr;
+		local->memory.hw.rtc.offset = 0;
+	}
+}
+
+
 bool CoreController::isLANConnected() const {
 #ifdef M_CORE_GBA
 	return m_lanActive && !SOCKET_FAILED(m_lanEndpoint.conn);
@@ -867,6 +1143,9 @@ void CoreController::start() {
 }
 
 void CoreController::stop() {
+#ifdef M_CORE_GBA
+	detachLAN2();
+#endif
 	setSync(false);
 #ifdef ENABLE_DEBUGGERS
 	if (m_malController) {
@@ -886,6 +1165,14 @@ void CoreController::reset() {
 
 void CoreController::setPaused(bool paused) {
 	QMutexLocker locker(&m_actionMutex);
+#ifdef M_CORE_GBA
+	if (m_lan2Running) {
+		// v2 owns the core thread's pause; the button only stops the runner.
+		m_lan2Paused = paused;
+		QMetaObject::invokeMethod(this, paused ? "paused" : "unpaused");
+		return;
+	}
+#endif
 	if (paused) {
 		if (m_moreFrames < 0) {
 			m_moreFrames = 1;

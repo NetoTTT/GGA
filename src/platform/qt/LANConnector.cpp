@@ -8,6 +8,7 @@
 
 #include <QMessageBox>
 #include <QAbstractSocket>
+#include <QCheckBox>
 #include <QNetworkAddressEntry>
 #include <QNetworkInterface>
 #include <QStringList>
@@ -22,6 +23,12 @@ LANConnector::LANConnector(Window* window, QWidget* parent)
 	, m_window(window)
 {
 	m_ui.setupUi(this);
+
+	// v2 lives outside the .ui so the legacy dialog stays untouched.
+	m_v2 = new QCheckBox(tr("Input sync (v2)"), this);
+	m_v2->setToolTip(tr("Deterministic input netplay: both players are emulated "
+	                    "locally and only the inputs are exchanged."));
+	m_ui.gridLayout->addWidget(m_v2, 9, 0, 1, 2);
 
 	connect(window, &QObject::destroyed, this, &QWidget::close);
 	connect(m_ui.host, &QAbstractButton::clicked, this, &LANConnector::host);
@@ -73,7 +80,10 @@ void LANConnector::host() {
 	}
 	m_controller = m_window->controller();
 	CoreController::Interrupter interrupter(m_controller);
-	if (!m_controller->attachLAN(true, QString(), m_ui.hostPort->value())) {
+	bool ok = m_v2->isChecked()
+		? m_controller->attachLAN2(true, QString(), m_ui.hostPort->value())
+		: m_controller->attachLAN(true, QString(), m_ui.hostPort->value());
+	if (!ok) {
 		QMessageBox* fail = new QMessageBox(QMessageBox::Warning, tr("Couldn't Host"),
 		                                    tr("Could not listen on port %1.").arg(m_ui.hostPort->value()),
 		                                    QMessageBox::Ok);
@@ -96,19 +106,28 @@ void LANConnector::join() {
 	}
 	m_controller = m_window->controller();
 	CoreController::Interrupter interrupter(m_controller);
-	if (!m_controller->attachLAN(false, addr, m_ui.joinPort->value())) {
+	bool ok = m_v2->isChecked()
+		? m_controller->attachLAN2(false, addr, m_ui.joinPort->value())
+		: m_controller->attachLAN(false, addr, m_ui.joinPort->value());
+	if (!ok) {
 		QString why;
-		switch (m_controller->lanRejectReason()) {
-		case 3:
-			why = tr("ROM mismatch: both sides need the identical ROM dump.");
-			break;
-		case 1:
-		case 2:
-			why = tr("Version mismatch: update both sides to the same build.");
-			break;
-		default:
-			why = tr("Could not join %1. Check the IP, port and ROM.").arg(addr);
-			break;
+		if (m_v2->isChecked()) {
+			why = m_controller->lanError().isEmpty()
+				? tr("Could not join %1. Check the IP and port.").arg(addr)
+				: m_controller->lanError();
+		} else {
+			switch (m_controller->lanRejectReason()) {
+			case 3:
+				why = tr("ROM mismatch: both sides need the identical ROM dump.");
+				break;
+			case 1:
+			case 2:
+				why = tr("Version mismatch: update both sides to the same build.");
+				break;
+			default:
+				why = tr("Could not join %1. Check the IP, port and ROM.").arg(addr);
+				break;
+			}
 		}
 		QMessageBox* fail = new QMessageBox(QMessageBox::Warning, tr("Couldn't Connect"), why, QMessageBox::Ok);
 		fail->setAttribute(Qt::WA_DeleteOnClose);
@@ -121,6 +140,7 @@ void LANConnector::join() {
 
 void LANConnector::detach() {
 	if (m_controller) {
+		m_controller->detachLAN2();
 		m_controller->detachLAN();
 		m_controller.reset();
 	}
@@ -132,9 +152,10 @@ void LANConnector::updateStatus() {
 		m_controller->pollHostSession();
 		m_controller->pollClientAttach();
 	}
-	bool connected = m_controller && m_controller->isLANConnected();
-	bool hosting = m_controller && m_controller->isLANHosting();
-	bool session = m_controller && m_controller->isLANSessionActive();
+	bool v2 = m_controller && m_controller->isLAN2Active();
+	bool connected = v2 || (m_controller && m_controller->isLANConnected());
+	bool hosting = m_controller && (v2 ? m_controller->isLAN2Hosting() : m_controller->isLANHosting());
+	bool session = m_controller && (v2 ? m_controller->isLAN2Running() : m_controller->isLANSessionActive());
 	bool active = connected || hosting;
 	m_ui.host->setDisabled(active);
 	m_ui.join->setDisabled(active);
@@ -147,7 +168,15 @@ void LANConnector::updateStatus() {
 	if (m_ui.hostAddresses->toPlainText() != addresses) {
 		m_ui.hostAddresses->setPlainText(addresses);
 	}
-	if (connected && session) {
+	if (v2) {
+		if (session) {
+			m_ui.status->setText(tr("Input sync (v2) running - frame %1.").arg(m_controller->lan2Frame()));
+		} else if (hosting) {
+			m_ui.status->setText(tr("Hosting (v2) on port %1: waiting for the other player.").arg(m_ui.hostPort->value()));
+		} else {
+			m_ui.status->setText(tr("Connected (v2); waiting for the session to start."));
+		}
+	} else if (connected && session) {
 		if (m_controller->lanSlot() == 0) {
 			m_ui.status->setText(tr("Host P0 connected to client P1."));
 		} else {

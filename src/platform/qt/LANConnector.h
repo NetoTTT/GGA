@@ -8,6 +8,7 @@
 #include "ui_LANConnector.h"
 
 #include <memory>
+#include <QCheckBox>
 #include <QTimer>
 
 namespace QGBA {
@@ -35,6 +36,7 @@ private:
 	std::shared_ptr<CoreController> m_controller;
 	Window* m_window;
 	QTimer m_statusTimer;
+	QCheckBox* m_v2 = nullptr;
 };
 
 }

@@ -33,6 +33,8 @@
 #include <mgba/internal/gba/sio/lockstep.h>
 #include <mgba/internal/gba/sio/netdriver.h>
 #include <mgba/internal/gba/sio/netep.h>
+#include <mgba/internal/gba/sio/netrunner.h>
+#include <mgba/internal/gba/sio/netsession.h>
 #endif
 
 #ifdef M_CORE_GBA
@@ -231,6 +233,15 @@ public slots:
 	int lanTransferMode() const;
 	int lanSlot() const;
 	int lanRejectReason() const;
+
+	/* v2 deterministic input netplay: both players are simulated in this
+	 * process and only key masks cross the wire. */
+	bool attachLAN2(bool isHost, const QString& address, int port);
+	void detachLAN2();
+	bool isLAN2Active() const { return m_lan2Active; }
+	bool isLAN2Hosting() const { return m_lan2Active && m_lan2Host; }
+	bool isLAN2Running() const { return m_lan2Running; }
+	int lan2Frame() const { return m_lan2Frame; }
 #endif
 
 	void setAVStream(mAVStream*);
@@ -269,6 +280,9 @@ private:
 	void updateKeys();
 	void startLanWorker();
 	void stopLanWorker();
+	void pumpLAN2();
+	void startLAN2Session();
+	void installLAN2Rtc();
 	int updateAutofire();
 	void finishFrame();
 
@@ -382,6 +396,32 @@ private:
 	bool m_lanDriverAttached = false;
 	qint64 m_lanJoinStartMs = 0;
 	QString m_lanError;
+
+	/* v2: the runner steps both cores itself, so mCoreThread is paused and
+	 * the display is fed straight from the runner. The peer core is a
+	 * second GBA instance built from the local ROM/BIOS image. */
+	struct LAN2RtcSource : mRTCSource {
+		int64_t epochMs = 0;
+	};
+	static time_t transportRtcFixed(struct mRTCSource* source);
+	static void transportGetRtcSeed2(void* context, int64_t* epochMs);
+	static void transportLoadRtcSeed2(void* context, int64_t epochMs);
+	GBASIONetRunner m_lan2Runner;
+	GBASIONetSession m_lan2State;
+	GBASIONetEndpoint m_lan2Endpoint;
+	GBASIONetTransport m_lan2Transport;
+	GBASIOLockstepCoordinator m_lan2LinkCoord;
+	GBASIOLockstepDriver m_lan2LinkDriver;
+	GBASIONetLink m_lan2Link;
+	LAN2RtcSource m_lan2Rtc;
+	struct mCore* m_lan2Peer = nullptr;
+	bool m_lan2Active = false;
+	bool m_lan2Running = false;
+	bool m_lan2RunnerReady = false;
+	bool m_lan2Host = false;
+	bool m_lan2Paused = false;
+	int m_lan2Frame = 0;
+	int64_t m_lan2LastFrameMs = 0;
 #endif
 
 #ifdef ENABLE_DEBUGGERS
