@@ -218,6 +218,23 @@ in-game link menu survive real game behavior (Rebit's "demo boots" →
 Removing a player detaches its SIO driver, wakes the rest, and keeps the
 session alive when the game tolerates a disconnected cable.
 
+For two players there is nobody left to keep running, so a departure ends
+the session. `GBASIONetSessionOnPeerGone` records why, first reason wins,
+and `NextFrame` goes false for good once ended:
+
+| reason | source |
+| --- | --- |
+| `GGA_NET_END_LOCAL` | we called `Stop` |
+| `GGA_NET_END_PEER_STOP` | the peer's `STOP` |
+| `GGA_NET_END_PEER_BYE` | the peer's `BYE` |
+| `GGA_NET_END_REJECT` | the peer's `REJECT` |
+| `GGA_NET_END_PEER_GONE` | the peer's socket died (EOF/reset) |
+| `GGA_NET_END_DESYNC` | hashes disagreed |
+| `GGA_NET_END_PROTOCOL` | a frame we could not place |
+
+Keeping the remaining players running needs three or more, and lands with
+4P support (`DETACH` on the wire).
+
 ### Desync policy
 
 Compare per-player hashes every 60 frames (`GGA_NET_HASH_INTERVAL`). On

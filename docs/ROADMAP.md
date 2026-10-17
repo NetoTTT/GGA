@@ -63,8 +63,14 @@ hashes (host-authoritative ticks).
       second; a mismatch sets `desync` and stops the session without resyncing.
       The same test compares 130 clean frames and then trips the host on a
       deliberately corrupted guest hash.
-- [ ] Detach + session lifecycle; then 4P
-- [ ] Detach + session lifecycle; then 4P
+- [x] Detach + session lifecycle:
+      `GBASIONetSessionEnded`/`EndReason` report why a session stopped
+      (local stop, peer `STOP`/`BYE`/`REJECT`, dead socket, desync, protocol
+      error), and `netep.c` feeds the last three back from the wire. A
+      departing peer ends a 2-player session; `NextFrame` stays false after.
+      Covered by `gga/netsession-test.c`, which kills the guest both ways
+      (graceful `BYE` -> `PEER_BYE`, bare socket close -> `PEER_GONE`).
+- [ ] 4P + crossplay (PC/mobile) + soak
 
 ## Phase 2 — Android frontend
 
