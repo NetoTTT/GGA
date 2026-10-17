@@ -783,6 +783,14 @@ bool CoreController::attachLAN2(bool isHost, const QString& address, int port) {
 	}
 	m_lanError.clear();
 
+	// Mirror stderr to a per-process file: this is a GUI build with no
+	// console, so the netplay traces are the only window into link issues.
+	QString v2LogPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+		+ QStringLiteral("/lanplay-%1.log").arg(QCoreApplication::applicationPid());
+	if (freopen(v2LogPath.toLocal8Bit().constData(), "w", stderr)) {
+		setvbuf(stderr, nullptr, _IONBF, 0);
+	}
+
 	GBA* local = static_cast<GBA*>(m_threadContext.core->board);
 	if (!local || !local->memory.rom || !local->memory.romSize) {
 		m_lanError = tr("No ROM is loaded.");
