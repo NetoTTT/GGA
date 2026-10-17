@@ -56,6 +56,14 @@ struct GBASIONetEndpoint {
 	uint8_t* inReasm;
 	size_t inReasmTotal;
 	size_t inReasmGot;
+	/* Startup blob reassembly (GGA_NET_BLOB). Kept separate from
+	 * inReasm so a late-join STATE transfer cannot interleave. */
+	uint8_t* blobReasm;
+	bool blobActive;
+	uint8_t blobKind;
+	uint32_t blobTotal;
+	uint32_t blobHash;
+	size_t blobGot;
 	uint8_t inbuf[GGA_NET_MAX_PAYLOAD];
 	uint8_t hdrAcc[3];
 	size_t hdrGot;

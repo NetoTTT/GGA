@@ -49,6 +49,10 @@ void GBASIONetEndpointClose(struct GBASIONetEndpoint* ep) {
 	free(ep->inReasm);
 	ep->inReasm = 0;
 	ep->inReasmTotal = ep->inReasmGot = 0;
+	free(ep->blobReasm);
+	ep->blobReasm = 0;
+	ep->blobActive = false;
+	ep->blobTotal = ep->blobGot = 0;
 }
 
 bool GBASIONetEndpointListen(struct GBASIONetEndpoint* ep, int port) {
@@ -124,6 +128,40 @@ static bool _outboxAppend(struct GBASIONetEndpoint* ep, uint8_t id, const void* 
 		ep->outboxLen += len;
 	}
 	return true;
+}
+
+/* Queue a whole startup blob as GGA_NET_BLOB chunks. Mirrors the STATE
+ * chunking shape, adding the kind byte and a whole-blob hash. */
+static bool _queueBlob(struct GBASIONetEndpoint* ep, uint8_t kind, const void* bytes, size_t size) {
+	uint32_t hash = GGANetHash32(bytes, size);
+	uint8_t* frame = malloc(GGA_NET_BLOB_HEADER + GGA_NET_BLOB_CHUNK);
+	uint32_t off = 0;
+	bool ok = true;
+	if (!frame) {
+		return false;
+	}
+	do {
+		uint16_t n;
+		if (size - off > GGA_NET_BLOB_CHUNK) {
+			n = GGA_NET_BLOB_CHUNK;
+		} else {
+			n = (uint16_t) (size - off);
+		}
+		frame[0] = kind;
+		GGANetStoreU32(&frame[1], (uint32_t) size);
+		GGANetStoreU32(&frame[5], off);
+		GGANetStoreU32(&frame[9], hash);
+		if (n) {
+			memcpy(&frame[GGA_NET_BLOB_HEADER], (const uint8_t*) bytes + off, n);
+		}
+		if (!_outboxAppend(ep, 0x26, frame, (uint16_t) (GGA_NET_BLOB_HEADER + n))) {
+			ok = false;
+			break;
+		}
+		off += n;
+	} while (off < size);
+	free(frame);
+	return ok;
 }
 
 static void _transportSend(void* context, int targetPlayer, int kind, int32_t a, int32_t b,
@@ -328,6 +366,25 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 			GGANetStoreI32(&w[1], 0);
 			GGANetSendFrame(ep->conn, 0x11, w, sizeof(w));
 			ep->peerHello = true;
+			/* v2 startup: seed the RTC, then share the ROM and save
+			 * so the client can boot the same session. */
+			if (link->transport.getRtcSeed) {
+				int64_t seed = 0;
+				link->transport.getRtcSeed(link->transport.context, &seed);
+				GGANetSendRtcSeed(ep->conn, seed);
+			}
+			if (link->transport.getBlob) {
+				static const uint8_t kinds[2] = { GGA_NET_BLOB_ROM, GGA_NET_BLOB_SAVE };
+				int ki;
+				for (ki = 0; ki < 2; ++ki) {
+					void* bytes = 0;
+					size_t size = 0;
+					if (link->transport.getBlob(link->transport.context, kinds[ki], &bytes, &size) && bytes) {
+						_queueBlob(ep, kinds[ki], bytes, size);
+						free(bytes);
+					}
+				}
+			}
 		}
 		break;
 	}
@@ -405,6 +462,55 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 		}
 		break;
 	}
+	case 0x26: { /* BLOB chunk: reassemble, verify hash, hand to the app */
+		if (len < GGA_NET_BLOB_HEADER) {
+			break;
+		}
+		uint8_t kind = pay[0];
+		uint32_t total = GGANetLoadU32(&pay[1]);
+		uint32_t off = GGANetLoadU32(&pay[5]);
+		uint32_t hash = GGANetLoadU32(&pay[9]);
+		size_t n;
+		if (total > 32 * 1024 * 1024) {
+			break;
+		}
+		if (!ep->blobActive || ep->blobTotal != total || ep->blobKind != kind) {
+			free(ep->blobReasm);
+			ep->blobReasm = malloc(total ? total : 1);
+			ep->blobActive = !!ep->blobReasm;
+			ep->blobTotal = total;
+			ep->blobKind = kind;
+			ep->blobHash = hash;
+			ep->blobGot = 0;
+		}
+		if (!ep->blobActive) {
+			break;
+		}
+		n = len - GGA_NET_BLOB_HEADER;
+		if (off > total || n > total - off) {
+			break;
+		}
+		memcpy(ep->blobReasm + off, pay + GGA_NET_BLOB_HEADER, n);
+		if ((size_t) off + n > ep->blobGot) {
+			ep->blobGot = off + n;
+		}
+		if (ep->blobGot >= total) {
+			if (GGANetHash32(ep->blobReasm, total) == hash && link->transport.loadBlob) {
+				link->transport.loadBlob(link->transport.context, kind, ep->blobReasm, total);
+			}
+			free(ep->blobReasm);
+			ep->blobReasm = 0;
+			ep->blobActive = false;
+			ep->blobTotal = ep->blobGot = 0;
+		}
+		break;
+	}
+	case 0x27: /* RTC seed */
+		if (len >= 8 && link->transport.loadRtcSeed) {
+			uint64_t ms = ((uint64_t) GGANetLoadU32(&pay[0]) << 32) | GGANetLoadU32(&pay[4]);
+			link->transport.loadRtcSeed(link->transport.context, (int64_t) ms);
+		}
+		break;
 	case 0x06:
 	case 0x07:
 		if (id == 0x07) {

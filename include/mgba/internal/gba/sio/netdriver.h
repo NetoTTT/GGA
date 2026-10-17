@@ -48,6 +48,15 @@ struct GBASIONetTransport {
 	/* Full-state bytes for late join (frontend-provided, may be NULL). */
 	bool (*saveState)(void* context, void** bytes, size_t* size);
 	void (*loadState)(void* context, const void* bytes, size_t size);
+	/* Startup blob sharing (v2 input netplay). getBlob must return a
+	 * malloc'd buffer that the caller frees; returning false means "no
+	 * blob of this kind". loadBlob receives a hash-verified buffer and
+	 * does not take ownership. */
+	bool (*getBlob)(void* context, uint8_t kind, void** bytes, size_t* size);
+	void (*loadBlob)(void* context, uint8_t kind, const void* bytes, size_t size);
+	/* Deterministic RTC seed (ms since epoch), applied before reset. */
+	void (*getRtcSeed)(void* context, int64_t* epochMs);
+	void (*loadRtcSeed)(void* context, int64_t epochMs);
 };
 
 struct GBASIONetProxyUser {
