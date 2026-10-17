@@ -134,6 +134,10 @@ static inline ssize_t SocketSend(Socket socket, const void* buffer, size_t size)
 	return send(socket, (const char*) buffer, size, 0);
 #elif defined(GEKKO)
 	return net_write(socket, buffer, size);
+#elif defined(MSG_NOSIGNAL)
+	/* GGA: a peer that has gone away must surface as a send error, not
+	 * raise SIGPIPE and kill the process (netplay disconnect path). */
+	return send(socket, (const char*) buffer, size, MSG_NOSIGNAL);
 #else
 	return write(socket, buffer, size);
 #endif
