@@ -453,6 +453,54 @@ static int64_t lanNowMs(void*) {
 	return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+#ifdef M_CORE_GBA
+static CoreController* lanOwner(void* context) {
+	auto* ep = static_cast<GBASIONetEndpoint*>(context);
+	return ep ? static_cast<CoreController*>(ep->userdata) : nullptr;
+}
+
+static GBA* lanGBA(CoreController* self) {
+	if (!self || self->platform() != mPLATFORM_GBA) {
+		return nullptr;
+	}
+	return static_cast<GBA*>(self->thread()->core->board);
+}
+
+time_t CoreController::transportRtcUnixTime(struct mRTCSource* source) {
+	auto* rtc = reinterpret_cast<LANRtcSource*>(source);
+	int64_t elapsed = lanNowMs(nullptr) - rtc->installedMs;
+	return static_cast<time_t>((rtc->baseUnixMs + elapsed) / 1000);
+}
+
+void CoreController::transportGetRtcSeed(void* context, int64_t* epochMs) {
+	CoreController* self = lanOwner(context);
+	*epochMs = self ? self->m_lanRtc.baseUnixMs : 0;
+}
+
+void CoreController::transportLoadRtcSeed(void* context, int64_t epochMs) {
+	CoreController* self = lanOwner(context);
+	if (self) {
+		self->installLANRtc(epochMs);
+	}
+}
+
+void CoreController::installLANRtc(int64_t epochMs) {
+	GBA* gba = lanGBA(this);
+	if (!gba) {
+		return;
+	}
+	Interrupter interrupter(this);
+	m_lanRtc.baseUnixMs = epochMs;
+	m_lanRtc.installedMs = lanNowMs(nullptr);
+	m_lanRtc.sample = nullptr;
+	m_lanRtc.unixTime = &CoreController::transportRtcUnixTime;
+	m_lanRtc.serialize = nullptr;
+	m_lanRtc.deserialize = nullptr;
+	gba->memory.hw.rtc.offset = 0;
+	gba->rtcSource = &m_lanRtc;
+}
+#endif
+
 void CoreController::pumpLAN() {
 #ifdef M_CORE_GBA
 	if (m_lanActive) {
@@ -515,15 +563,19 @@ bool CoreController::attachLAN(bool isHost, const QString& address, int port) {
 	GBASIOLockstepCoordinatorInit(&m_lanCoord);
 	memset(&m_lanTransport, 0, sizeof(m_lanTransport));
 	m_lanTransport.nowMs = lanNowMs;
+	m_lanTransport.getRtcSeed = CoreController::transportGetRtcSeed;
+	m_lanTransport.loadRtcSeed = CoreController::transportLoadRtcSeed;
 	GBASIOLockstepDriverCreate(&m_lanDriver, &m_lanUser.d);
 	GBASIONetLinkInit(&m_lanLink, &m_lanCoord, &m_lanDriver, &m_lanUser.d);
 	GBASIONetEndpointInit(&m_lanEndpoint, &m_lanLink, &m_lanTransport);
+	m_lanEndpoint.userdata = this;
 	GBASIONetEndpointSetIdentity(&m_lanEndpoint, romHash, isHost ? "P0" : "P1");
 	if (isHost) {
 		// Listen-only for now: the game keeps running solo (visible)
 		// until a client knocks. pollHostSession() starts the linked
 		// session (attach + reset) when the HELLO arrives, so both
 		// sides reboot from identical states.
+		installLANRtc(QDateTime::currentMSecsSinceEpoch());
 		m_lanLink.assignedSlot = 0;
 		m_lanLink.isHost = true;
 		if (!GBASIONetEndpointListen(&m_lanEndpoint, port)) {
@@ -634,6 +686,12 @@ void CoreController::detachLAN() {
 	stopLanWorker();
 	if (platform() == mPLATFORM_GBA) {
 		m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
+		GBA* gba = static_cast<GBA*>(m_threadContext.core->board);
+		if (gba && gba->rtcSource == &m_lanRtc) {
+			Interrupter interrupter(this);
+			gba->rtcSource = NULL;
+			gba->memory.hw.rtc.offset = 0;
+		}
 		if (m_lanDriverAttached) {
 			GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
 			m_lanDriverAttached = false;

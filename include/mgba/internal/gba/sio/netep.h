@@ -53,6 +53,10 @@ struct GBASIONetEndpoint {
 	uint8_t romHash[32];
 	char name[64];
 
+	/* Frontend-owned. Transport callbacks are handed the endpoint (see
+	 * GBASIONetEndpointInit), so this is how they get back to the app. */
+	void* userdata;
+
 	uint8_t* outbox;
 	size_t outboxLen;
 	size_t outboxCap;

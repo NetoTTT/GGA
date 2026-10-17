@@ -359,6 +359,17 @@ private:
 	struct LANLockstepUser : mLockstepThreadUser {
 		CoreController* parent = nullptr;
 	};
+	/* Shared virtual RTC: the host picks the base, the client is told it
+	 * during the handshake, and both advance it in real time. */
+	struct LANRtcSource : mRTCSource {
+		int64_t baseUnixMs = 0;
+		qint64 installedMs = 0;
+	};
+	static time_t transportRtcUnixTime(struct mRTCSource* source);
+	static void transportGetRtcSeed(void* context, int64_t* epochMs);
+	static void transportLoadRtcSeed(void* context, int64_t epochMs);
+	void installLANRtc(int64_t epochMs);
+	LANRtcSource m_lanRtc;
 	GBASIOLockstepCoordinator m_lanCoord;
 	GBASIOLockstepDriver m_lanDriver;
 	GBASIONetLink m_lanLink;
