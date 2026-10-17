@@ -80,9 +80,21 @@ hashes (host-authoritative ticks).
       Covered by `gga/netrunner-test.c`: two cores stay in lockstep through a
       real MULTI exchange and hash the same across runs, then two independent
       clients - each running both players' cores - talk over TCP loopback and
-      match their real hashes clean. The Qt frontend still runs one core per
-      `mCoreThread`; wiring the runner in (second core + second view, ROM/save
-      blobs) is the next step.
+      match their real hashes clean.
+- [x] Qt frontend hosts the runner (`CoreController::attachLAN2`): a second
+      GBA core is built from the running ROM/BIOS image (`VFileFromConstMemory`)
+      and both cores are stepped by the runner from the existing 5 ms LAN
+      worker, paced at ~60 fps. `mCoreThread` is paused for the duration (the
+      runner owns the local core) and its pause is hidden from the UI, which
+      keeps `isPaused()`/`pause` coherent via `m_lan2Paused`. The peer core is
+      headless (dummy renderer) and the local core still feeds the single
+      `Display`. RTC is a shared fixed-epoch source so both cores read the same
+      time. Driven by the "Input sync (v2)" checkbox in the LAN dialog; v1 stays
+      the default and the fallback. Compile-verified only - the two-machine
+      behavior still needs a manual run.
+- [ ] ROM/save blobs over v2 (the peer is mirrored from the local image for
+      now, so a mismatched-opponent flow and save transfer are not wired)
+- [ ] Second view for the peer core (one view is enough to play 2P today)
 - [ ] 4P + crossplay (PC/mobile) + soak
 
 ## Phase 2 — Android frontend
