@@ -49,7 +49,14 @@ hashes (host-authoritative ticks).
       (new `GBASIONetTransport` blob/RTC callbacks). Covered by
       `gga/net-selftest.c` and `gga/ep-blob-test.c`. The Qt LAN tab still has
       to supply the callbacks.
-- [ ] Host tick authority + guest tick buffer + backpressure
+- [x] Host tick authority + guest tick buffer + backpressure:
+      2-player `netsession.c` in the core: the host resolves one key mask per
+      player per frame, the guest runs a tick only when it arrives and answers
+      with its keys `GGA_NET_INPUT_DELAY` frames ahead, and a stalled guest
+      caps the host at `GGA_NET_TICK_AHEAD` frames instead of letting it run
+      away. Covered by `gga/netsession-test.c` (keys land on the exact frame,
+      host capped at frame 9 with the guest stalled). 4P, desync detection and
+      the Qt multi-core view are still open.
 - [ ] Desync detection (per-player hashes, stop-on-mismatch)
 - [ ] Detach + session lifecycle; then 4P
 
