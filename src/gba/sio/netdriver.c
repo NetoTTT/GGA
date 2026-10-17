@@ -10,6 +10,7 @@
 #include <mgba-util/table.h>
 
 #include <string.h>
+#include <stdio.h>
 
 #define PROXY_TARGET(P) (1u << (P))
 
@@ -196,6 +197,9 @@ static void _tapProxies(struct GBASIONetLink* link) {
 						link->slotAcked[link->localSlot] = true;
 					}
 				}
+				if (link->isHost) {
+					link->awaitingData = true;
+				}
 				break;
 			case SIO_EV_MODE_SET:
 				kind = GGA_NET_EV_MODE_SET;
@@ -244,9 +248,9 @@ static void _enforceStall(struct GBASIONetLink* link) {
 	if (!link->isHost || !link->transferSeen || !link->transport.nowMs) {
 		return;
 	}
-	if (!link->coordinator->transferActive) {
-		return;
-	}
+	/* Covers both windows: a parked transfer park (transferActive is still
+	 * false until the barrier clears) and an in-flight transfer. Without
+	 * this the park can hang forever when the peer's DATA is lost. */
 	int64_t now = link->transport.nowMs(link->transport.context);
 	if (now - link->transferStartMs < GGA_NET_STALL_BUDGET_MS) {
 		return;
@@ -263,6 +267,7 @@ static void _enforceStall(struct GBASIONetLink* link) {
 			GBASIOLockstepCoordinatorAckPlayer(link->coordinator, proxy);
 		}
 	}
+	link->awaitingData = false;
 }
 
 /* Keep player time and wire timestamps in the same domain. Without a local
@@ -292,17 +297,36 @@ static void _alignClock(struct GBASIONetLink* link) {
  * nest, and opportunistic try-locks were observed to starve here. */
 void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 	MutexLock(&link->coordinator->mutex);
+	/* TEMP DIAG (revert): 1 Hz heartbeat on the pump thread, so it keeps
+	 * printing even when the core thread is parked. */
+	static int64_t lastHb = 0;
+	if (link->transport.nowMs) {
+		int64_t nowMs = link->transport.nowMs(link->transport.context);
+		if (nowMs - lastHb >= 1000) {
+			lastHb = nowMs;
+			struct GBASIOLockstepPlayer* local = link->localSlot >= 0 ? TableLookup(
+				&link->coordinator->players, link->realDriver->lockstepId) : 0;
+			fprintf(stderr,
+				"DBG hb slot=%d host=%d tActive=%d waiting=%x nAtt=%d tSeen=%d tPend=%d localAsleep=%d\n",
+				link->localSlot, link->isHost, link->coordinator->transferActive,
+				link->coordinator->waiting, link->coordinator->nAttached,
+				link->transferSeen, link->transferPending, local ? local->asleep : -9);
+		}
+	}
 	_tapProxies(link);
 	if (link->transferSeen && !link->coordinator->transferActive) {
 		/* Transfer just completed: everyone (including us) agreed. */
 		if (link->isHost) {
 			/* TEMP DIAG (revert): what did the games actually exchange? */
-			fprintf(stderr, "DBG result multi=%04X %04X %04X %04X\n",
+			fprintf(stderr, "DBG result multi=%04X %04X %04X %04X slotAck=%X\n",
 				link->coordinator->multiData[0], link->coordinator->multiData[1],
-				link->coordinator->multiData[2], link->coordinator->multiData[3]);
+				link->coordinator->multiData[2], link->coordinator->multiData[3],
+				(link->slotAcked[0] ? 1 : 0) | (link->slotAcked[1] ? 2 : 0)
+					| (link->slotAcked[2] ? 4 : 0) | (link->slotAcked[3] ? 8 : 0));
 			_broadcastResult(link);
 		}
 		link->transferSeen = false;
+		link->awaitingData = false;
 	}
 	if (!link->isHost && link->transferPending) {
 		/* Ship once our thread consumed the injected TRANSFER_START
@@ -327,6 +351,7 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 			uint32_t v = (link->coordinator->transferMode == GBA_SIO_MULTI)
 				? link->coordinator->multiData[link->localSlot]
 				: link->coordinator->normalData[link->localSlot];
+			{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG ship slot=%d v=%04X\n", link->localSlot, v); }
 			uint8_t pay[5];
 			pay[0] = (uint8_t) link->localSlot;
 			pay[1] = v & 0xFF;
@@ -486,7 +511,15 @@ bool GBASIONetLinkOnWire(struct GBASIONetLink* link, int senderSlot,
 		GBASIONetLinkOnTransferData(link, p[0], v);
 	} else if (kind == GGA_NETW_ACK) {
 		struct GBASIOLockstepPlayer* proxy = _findProxy(link, a);
-		if (proxy) {
+		/* While waiting for a transfer slot's DATA, a control-plane ack
+		 * (mode/attach/hard-sync) must NOT clear the park: it would let
+		 * the host broadcast the result before the contribution lands,
+		 * so the peer's word reads as 0xFFFF and the game never sees
+		 * the other player. Only the DATA (or the stall budget) ends
+		 * the wait. */
+		bool awaitingData = link->awaitingData
+			&& a >= 0 && a < MAX_GBAS && !link->slotAcked[a];
+		if (proxy && !awaitingData) {
 			GBASIOLockstepCoordinatorAckPlayer(link->coordinator, proxy);
 		}
 	}
@@ -523,9 +556,11 @@ void GBASIONetLinkClearStaleSleep(struct GBASIONetLink* link) {
  * keeps wire ids stable with net.h framing. */bool GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value) {
 	MutexLock(&link->coordinator->mutex);
 	_writeSlot(link, slot, value);
+	{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG gotslot slot=%d v=%04X\n", slot, value); }
 	if (slot >= 0 && slot < MAX_GBAS) {
 		link->slotAcked[slot] = true;
 	}
+	link->awaitingData = false;
 	struct GBASIOLockstepPlayer* proxy = _findProxy(link, slot);
 	if (proxy) {
 		GBASIOLockstepCoordinatorAckPlayer(link->coordinator, proxy);

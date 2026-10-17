@@ -8,6 +8,7 @@
 #include "ui_LANConnector.h"
 
 #include <memory>
+#include <QTimer>
 
 namespace QGBA {
 
@@ -33,6 +34,7 @@ private:
 
 	std::shared_ptr<CoreController> m_controller;
 	Window* m_window;
+	QTimer m_statusTimer;
 };
 
 }

@@ -482,6 +482,7 @@ static void GBASIOLockstepDriverSetMode(struct GBASIODriver* driver, enum GBASIO
 	struct GBASIOLockstepPlayer* player = TableLookup(&coordinator->players, lockstep->lockstepId);
 	if (mode != player->mode) {
 		mLOG(GBA_SIO, DEBUG, "Switching mode from %d to %d", player->mode, mode);
+		fprintf(stderr, "DBG setMode pid=%d %d->%d\n", player->playerId, player->mode, mode);
 		player->mode = mode;
 		struct GBASIOLockstepEvent event = {
 			.type = SIO_EV_MODE_SET,
@@ -595,6 +596,7 @@ static void GBASIOLockstepDriverFinishMultiplayer(struct GBASIODriver* driver, u
 			     coordinator->multiData[2],
 			     coordinator->multiData[3]);
 			memcpy(data, coordinator->multiData, sizeof(uint16_t) * 4);
+			{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG finishM pid=%d dr=%d m=%04X %04X\n", player->playerId, player->dataReceived, coordinator->multiData[0], coordinator->multiData[1]); }
 		}
 		player->dataReceived = false;
 		if (player->playerId == 0) {
@@ -889,6 +891,7 @@ static void _setData(struct GBASIOLockstepCoordinator* coordinator, uint32_t id,
 	switch (coordinator->transferMode) {
 	case GBA_SIO_MULTI:
 		coordinator->multiData[id] = sio->p->memory.io[GBA_REG(SIOMLT_SEND)];
+		{ static unsigned long n; if (++n % 400 == 0) fprintf(stderr, "DBG setData id=%u v=%04X\n", id, coordinator->multiData[id]); }
 		break;
 	case GBA_SIO_NORMAL_8:
 		coordinator->normalData[id] = sio->p->memory.io[GBA_REG(SIODATA8)];
@@ -1058,6 +1061,15 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 			player->driver->d.p->siocnt |= 0x80;
 			mTimingDeschedule(&sio->p->timing, &sio->completeEvent);
 			mTimingSchedule(&sio->p->timing, &sio->completeEvent, nextEvent);
+			/* Flag the transfer active for this coordinator before the
+			 * ack. Locally the master's DriverStart already set it on the
+			 * shared coordinator, so this is a no-op; on a split (network)
+			 * coordinator the master ran that elsewhere, leaving the slave
+			 * coord with transferActive==false. AckPlayer only stamps
+			 * dataReceived while a transfer is active, so without this the
+			 * slave's FinishMultiplayer hands the ROM 0xFFFF and it never
+			 * sees the peer. */
+			coordinator->transferActive = true;
 			GBASIOLockstepCoordinatorAckPlayer(coordinator, player);
 			break;
 		case SIO_EV_MODE_SET:
@@ -1094,7 +1106,15 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 		nextEvent = player->queue->timestamp - GBASIOLockstepTime(player);
 	}
 
-	if (player->playerId != 0 && nextEvent <= LOCKSTEP_INTERVAL) {
+	/* GGA: a remote-clocked slave must not park waiting for a primary
+	 * that does not exist locally. In local lockstep the master unparks
+	 * its slaves every lockstep interval; here player 0 is a remote
+	 * proxy, so the only wake source would be wire events, throttling
+	 * the whole core to the wire event rate (a few fps). Free-run
+	 * between transfer barriers instead; the lockstep event still fires
+	 * on its own interval. Transfers keep working: while a transfer is
+	 * in flight the queue is non-empty, so no park happens anyway. */
+	if (player->playerId != 0 && nextEvent <= LOCKSTEP_INTERVAL && !coordinator->remoteClock) {
 		if (!player->queue || wasDetach) {
 			GBASIOLockstepPlayerSleep(player);
 			// XXX: Is there a better way to gain sync lock at the beginning?
@@ -1132,6 +1152,9 @@ void GBASIOLockstepCoordinatorWaitOnPlayers(struct GBASIOLockstepCoordinator* co
 	_advanceCycle(coordinator, player);
 	mLOG(GBA_SIO, DEBUG, "Primary waiting for players to ack");
 	coordinator->waiting = ((1 << coordinator->nAttached) - 1) & ~TARGET(player->playerId);
+	/* TEMP DIAG (revert): the park that freezes the host. */
+	fprintf(stderr, "DBG park pid=%d waiting=%x nAtt=%d tActive=%d\n",
+		player->playerId, coordinator->waiting, coordinator->nAttached, coordinator->transferActive);
 	GBASIOLockstepPlayerSleep(player);
 	GBASIOLockstepCoordinatorWakePlayers(coordinator);
 
@@ -1162,6 +1185,7 @@ void GBASIOLockstepCoordinatorAckPlayer(struct GBASIOLockstepCoordinator* coordi
 		return;
 	}
 	coordinator->waiting &= ~TARGET(player->playerId);
+	fprintf(stderr, "DBG ack pid=%d waiting=%x\n", player->playerId, coordinator->waiting);
 	if (!coordinator->waiting) {
 		mLOG(GBA_SIO, DEBUG, "All players acked, waking primary");
 		if (coordinator->transferActive) {

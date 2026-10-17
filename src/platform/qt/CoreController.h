@@ -228,6 +228,7 @@ public slots:
 	bool lanBarrierPending() const;
 	int lanWaiting() const;
 	int lanAttached() const;
+	int lanTransferMode() const;
 	int lanSlot() const;
 	int lanRejectReason() const;
 #endif

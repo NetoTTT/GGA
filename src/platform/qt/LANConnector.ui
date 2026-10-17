@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>340</width>
-    <height>190</height>
+    <width>430</width>
+    <height>330</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -20,7 +20,7 @@
    <item row="0" column="0" colspan="2">
     <widget class="QLabel" name="hostLabel">
      <property name="text">
-      <string>Host a session (others connect to you):</string>
+    <string>Host a session. Share an address and port below:</string>
      </property>
     </widget>
    </item>
@@ -81,7 +81,46 @@
      </property>
     </widget>
    </item>
-   <item row="5" column="0" colspan="2">
+    <item row="5" column="0" colspan="2">
+     <widget class="QLabel" name="addressesLabel">
+      <property name="text">
+        <string>Host addresses (LAN/VPN):</string>
+      </property>
+     </widget>
+    </item>
+    <item row="6" column="0" colspan="2">
+     <widget class="QPlainTextEdit" name="hostAddresses">
+      <property name="minimumSize">
+        <size>
+         <width>0</width>
+         <height>72</height>
+        </size>
+      </property>
+      <property name="maximumSize">
+        <size>
+         <width>16777215</width>
+         <height>90</height>
+        </size>
+      </property>
+      <property name="readOnly">
+        <bool>true</bool>
+      </property>
+      <property name="lineWrapMode">
+        <enum>QPlainTextEdit::NoWrap</enum>
+      </property>
+      <property name="placeholderText">
+        <string>Active IPv4 addresses will appear here.</string>
+      </property>
+     </widget>
+    </item>
+    <item row="7" column="0" colspan="2">
+     <widget class="QLabel" name="clientCount">
+      <property name="text">
+        <string>Remote clients: 0 / 1</string>
+      </property>
+     </widget>
+    </item>
+    <item row="8" column="0" colspan="2">
     <layout class="QHBoxLayout" name="horizontalLayout">
      <item>
       <widget class="QPushButton" name="join">

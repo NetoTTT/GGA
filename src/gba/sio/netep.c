@@ -203,6 +203,12 @@ static void _transportSend(void* context, int targetPlayer, int kind, int32_t a,
 	if (id < 32) {
 		ep->statTx[id]++;
 	}
+	/* TEMP DIAG (revert): see who sends what, with ms timestamps. */
+	int64_t nowMs = 0;
+	if (ep->link && ep->link->transport.nowMs) {
+		nowMs = ep->link->transport.nowMs(ep->link->transport.context);
+	}
+	fprintf(stderr, "%lld NET tx id=%u len=%u\n", (long long) nowMs, id, (unsigned) payLen);
 	_outboxAppend(ep, id, pay, (uint16_t) payLen);
 }
 
@@ -295,7 +301,12 @@ static void _replayDeferred(struct GBASIONetEndpoint* ep) {
 
 static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* pay, uint16_t len) {
 	struct GBASIONetLink* link = ep->link;
-	fprintf(stderr, "NET rx id=%u len=%u\n", id, len);
+	/* TEMP DIAG (revert): ms timestamps. */
+	int64_t nowMs = 0;
+	if (link && link->transport.nowMs) {
+		nowMs = link->transport.nowMs(link->transport.context);
+	}
+	fprintf(stderr, "%lld NET rx id=%u len=%u\n", (long long) nowMs, id, len);
 	if (id < 32) {
 		ep->statRx[id]++;
 	}

@@ -157,7 +157,8 @@ void LANConnector::updateStatus() {
 			+ tr(" [n=%1 wait=0x%2 bp=%3]")
 				.arg(m_controller->lanAttached())
 				.arg(m_controller->lanWaiting(), 0, 16)
-				.arg(m_controller->lanBarrierPending() ? 1 : 0));
+				.arg(m_controller->lanBarrierPending() ? 1 : 0)
+			+ tr(" mode=%1").arg(m_controller->lanTransferMode()));
 	} else if (hosting) {
 		m_ui.status->setText(tr("Hosting on port %1: playing solo until P1 joins, then the session restarts together.").arg(m_ui.hostPort->value()));
 	} else if (connected) {

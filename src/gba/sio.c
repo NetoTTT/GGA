@@ -9,6 +9,8 @@
 #include <mgba/internal/gba/io.h>
 #include <mgba/internal/gba/sio/gbp.h>
 
+#include <stdio.h>
+
 mLOG_DEFINE_CATEGORY(GBA_SIO, "GBA Serial I/O", "gba.sio");
 
 static const int GBASIOCyclesPerTransfer[4][MAX_GBAS] = {
@@ -202,6 +204,7 @@ void GBASIOWriteSIOCNT(struct GBASIO* sio, uint16_t value) {
 				// TODO
 			}
 		}
+		{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG siocntW id=%d v=%04X busy=%d\n", id, value, GBASIOMultiplayerIsBusy(value)); }
 		break;
 	case GBA_SIO_NORMAL_8:
 	case GBA_SIO_NORMAL_32:
@@ -311,6 +314,7 @@ uint16_t GBASIOWriteRegister(struct GBASIO* sio, uint32_t address, uint16_t valu
 		switch (address) {
 		case GBA_REG_SIOMLT_SEND:
 			mLOG(GBA_SIO, DEBUG, "MULTI %i write: SIOMLT_SEND <- %04X", id, value);
+			{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG mltsend id=%d v=%04X\n", id, value); }
 			break;
 		case GBA_REG_JOYCNT:
 			mLOG(GBA_SIO, DEBUG, "MULTI %i write: JOYCNT (?) <- %04X", id, value);

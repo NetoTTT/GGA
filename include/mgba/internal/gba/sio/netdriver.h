@@ -72,6 +72,12 @@ struct GBASIONetLink {
 	bool isHost;
 	int64_t transferStartMs;
 	bool transferSeen;
+	/* Host-only: set when a TRANSFER_START is put on the wire, cleared
+	 * once the peer slot's DATA lands (or the stall budget fills it).
+	 * While set, a control-plane ack must not clear the transfer park:
+	 * the park must wait for the contribution, otherwise the result
+	 * goes out with 0xFFFF for the peer. */
+	bool awaitingData;
 	/* Remote contribution tracking: transferPending set when a
 	 * TRANSFER_START is injected, with its timestamp. The transfer
 	 * path latches inline (no thread sleep), so ship once the event

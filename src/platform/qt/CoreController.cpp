@@ -752,6 +752,14 @@ int CoreController::lanAttached() const {
 	return 0;
 #endif
 }
+
+int CoreController::lanTransferMode() const {
+#ifdef M_CORE_GBA
+	return m_lanCoord.transferMode;
+#else
+	return -1;
+#endif
+}
 #endif
 
 void CoreController::setOverride(std::unique_ptr<Override> override) {
