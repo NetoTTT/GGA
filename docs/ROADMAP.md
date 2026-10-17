@@ -43,7 +43,12 @@ hashes (host-authoritative ticks).
       local determinism (identical state hashes across runs). `--siotest` also
       drives a real MULTI exchange, so the data path and its drain are covered,
       not just the park/ack barrier.
-- [ ] Startup blob exchange (ROM + save + deterministic RTC seed)
+- [x] Startup blob exchange (ROM + save + deterministic RTC seed):
+      `GGANetSendBlob`/`GGANetRecvBlob` chunk with a whole-blob hash, and
+      `netep.c` ships the RTC seed plus the ROM and save right after WELCOME
+      (new `GBASIONetTransport` blob/RTC callbacks). Covered by
+      `gga/net-selftest.c` and `gga/ep-blob-test.c`. The Qt LAN tab still has
+      to supply the callbacks.
 - [ ] Host tick authority + guest tick buffer + backpressure
 - [ ] Desync detection (per-player hashes, stop-on-mismatch)
 - [ ] Detach + session lifecycle; then 4P
