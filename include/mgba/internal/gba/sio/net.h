@@ -32,7 +32,17 @@ enum GGANetMsg {
 	GGA_NET_STATE_REQ = 0x24,
 	GGA_NET_STATE = 0x25,
 	GGA_NET_BLOB = 0x26,
-	GGA_NET_RTC_SEED = 0x27
+	GGA_NET_RTC_SEED = 0x27,
+	/* v2 input netplay (docs/NETPLAY-ARCHITECTURE.md): the host owns the
+	 * frame tick, guests feed it their input, and both sides compare
+	 * per-player state hashes. */
+	GGA_NET_INPUT = 0x28,
+	GGA_NET_TICK = 0x29,
+	GGA_NET_HASH = 0x2A,
+	GGA_NET_PAUSE = 0x2B,
+	GGA_NET_RESUME = 0x2C,
+	GGA_NET_STOP = 0x2D,
+	GGA_NET_DETACH = 0x2E
 };
 
 enum GGANetRejectReason {
@@ -85,6 +95,28 @@ bool GGANetRecvBlob(Socket sock, uint8_t* kind, void** dataOut, size_t* lenOut, 
  * epoch, sent as two little-endian u32. */
 bool GGANetSendRtcSeed(Socket sock, int64_t epochMs);
 bool GGANetRecvRtcSeed(Socket sock, int64_t* epochMs, int64_t timeoutMs);
+
+/* v2 tick protocol payloads. Keys are a 16-bit active-high mask in the
+ * GBA key order (A, B, Select, Start, Right, Left, Up, Down, R, L).
+ *   INPUT  [u32 frame][u16 keys]                    guest -> host
+ *   TICK   [u32 frame][u16 keys x nPlayers]         host  -> all
+ *   HASH   [u32 frame][u8 nPlayers][u32 hash x n]   both ways
+ * PAUSE/RESUME/STOP carry [u8 reason]; DETACH carries [u8 slot][u8 reason]
+ * and are sent with GGANetSendFrame directly.
+ *
+ * Calls that take a keys/hashes array expect room for GGA_NET_MAX_PLAYERS
+ * entries; RecvTick/RecvHash report how many the frame actually held.
+ * Sends reject a player count outside [1, GGA_NET_MAX_PLAYERS]; receives
+ * reject a frame whose length does not match its player count. */
+#define GGA_NET_MAX_PLAYERS 4
+#define GGA_NET_INPUT_SIZE 6
+#define GGA_NET_HASH_HEADER 5
+bool GGANetSendInput(Socket sock, uint32_t frame, uint16_t keys);
+bool GGANetRecvInput(Socket sock, uint32_t* frame, uint16_t* keys, int64_t timeoutMs);
+bool GGANetSendTick(Socket sock, uint32_t frame, const uint16_t* keys, uint8_t nPlayers);
+bool GGANetRecvTick(Socket sock, uint32_t* frame, uint16_t* keys, uint8_t* nPlayers, int64_t timeoutMs);
+bool GGANetSendHash(Socket sock, uint32_t frame, const uint32_t* hashes, uint8_t nPlayers);
+bool GGANetRecvHash(Socket sock, uint32_t* frame, uint32_t* hashes, uint8_t* nPlayers, int64_t timeoutMs);
 
 /* Little-endian scalar helpers (unaligned-safe) */
 void GGANetStoreU16(void* dest, uint16_t value);

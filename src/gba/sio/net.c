@@ -300,3 +300,109 @@ bool GGANetRecvRtcSeed(Socket sock, int64_t* epochMs, int64_t timeoutMs) {
 	}
 	return true;
 }
+
+bool GGANetSendInput(Socket sock, uint32_t frame, uint16_t keys) {
+	uint8_t payload[GGA_NET_INPUT_SIZE];
+	GGANetStoreU32(&payload[0], frame);
+	GGANetStoreU16(&payload[4], keys);
+	return GGANetSendFrame(sock, GGA_NET_INPUT, payload, sizeof(payload));
+}
+
+bool GGANetRecvInput(Socket sock, uint32_t* frame, uint16_t* keys, int64_t timeoutMs) {
+	uint8_t payload[GGA_NET_INPUT_SIZE];
+	uint8_t id;
+	uint16_t len;
+	if (!GGANetRecvFrame(sock, &id, payload, &len, timeoutMs) ||
+		id != GGA_NET_INPUT || len != GGA_NET_INPUT_SIZE) {
+		return false;
+	}
+	if (frame) {
+		*frame = GGANetLoadU32(&payload[0]);
+	}
+	if (keys) {
+		*keys = GGANetLoadU16(&payload[4]);
+	}
+	return true;
+}
+
+bool GGANetSendTick(Socket sock, uint32_t frame, const uint16_t* keys, uint8_t nPlayers) {
+	uint8_t payload[4 + 2 * GGA_NET_MAX_PLAYERS];
+	uint8_t i;
+	if (!nPlayers || nPlayers > GGA_NET_MAX_PLAYERS) {
+		return false;
+	}
+	GGANetStoreU32(&payload[0], frame);
+	for (i = 0; i < nPlayers; ++i) {
+		GGANetStoreU16(&payload[4 + 2 * i], keys[i]);
+	}
+	return GGANetSendFrame(sock, GGA_NET_TICK, payload, (uint16_t) (4 + 2 * nPlayers));
+}
+
+bool GGANetRecvTick(Socket sock, uint32_t* frame, uint16_t* keys, uint8_t* nPlayers, int64_t timeoutMs) {
+	uint8_t payload[4 + 2 * GGA_NET_MAX_PLAYERS];
+	uint8_t id;
+	uint16_t len;
+	uint8_t n;
+	uint8_t i;
+	if (!GGANetRecvFrame(sock, &id, payload, &len, timeoutMs) || id != GGA_NET_TICK) {
+		return false;
+	}
+	if (len < 6 || (len - 4) % 2 != 0 || (len - 4) / 2 > GGA_NET_MAX_PLAYERS) {
+		return false;
+	}
+	n = (uint8_t) ((len - 4) / 2);
+	if (frame) {
+		*frame = GGANetLoadU32(&payload[0]);
+	}
+	if (keys) {
+		for (i = 0; i < n; ++i) {
+			keys[i] = GGANetLoadU16(&payload[4 + 2 * i]);
+		}
+	}
+	if (nPlayers) {
+		*nPlayers = n;
+	}
+	return true;
+}
+
+bool GGANetSendHash(Socket sock, uint32_t frame, const uint32_t* hashes, uint8_t nPlayers) {
+	uint8_t payload[GGA_NET_HASH_HEADER + 4 * GGA_NET_MAX_PLAYERS];
+	uint8_t i;
+	if (!nPlayers || nPlayers > GGA_NET_MAX_PLAYERS) {
+		return false;
+	}
+	GGANetStoreU32(&payload[0], frame);
+	payload[4] = nPlayers;
+	for (i = 0; i < nPlayers; ++i) {
+		GGANetStoreU32(&payload[GGA_NET_HASH_HEADER + 4 * i], hashes[i]);
+	}
+	return GGANetSendFrame(sock, GGA_NET_HASH, payload, (uint16_t) (GGA_NET_HASH_HEADER + 4 * nPlayers));
+}
+
+bool GGANetRecvHash(Socket sock, uint32_t* frame, uint32_t* hashes, uint8_t* nPlayers, int64_t timeoutMs) {
+	uint8_t payload[GGA_NET_HASH_HEADER + 4 * GGA_NET_MAX_PLAYERS];
+	uint8_t id;
+	uint16_t len;
+	uint8_t n;
+	uint8_t i;
+	if (!GGANetRecvFrame(sock, &id, payload, &len, timeoutMs) ||
+		id != GGA_NET_HASH || len < GGA_NET_HASH_HEADER) {
+		return false;
+	}
+	n = payload[4];
+	if (!n || n > GGA_NET_MAX_PLAYERS || len != GGA_NET_HASH_HEADER + 4 * n) {
+		return false;
+	}
+	if (frame) {
+		*frame = GGANetLoadU32(&payload[0]);
+	}
+	if (hashes) {
+		for (i = 0; i < n; ++i) {
+			hashes[i] = GGANetLoadU32(&payload[GGA_NET_HASH_HEADER + 4 * i]);
+		}
+	}
+	if (nPlayers) {
+		*nPlayers = n;
+	}
+	return true;
+}

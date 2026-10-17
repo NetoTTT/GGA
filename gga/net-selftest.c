@@ -6,7 +6,8 @@
  *
  * Exercises: listen/connect, HELLO -> WELCOME, TRANSFER echo,
  * 64 KiB STATE blob round-trip, ROM/save blob round-trip, RTC seed,
- * REJECT on bad proto, heartbeat.
+ * v2 tick-protocol round-trips (TICK/INPUT/HASH), REJECT on bad proto,
+ * heartbeat.
  */
 #include <mgba/internal/gba/sio/net.h>
 
@@ -91,6 +92,10 @@ static void* _server(void* unused) {
 			break;
 		}
 		if (id == GGA_NET_TRANSFER_START) {
+			GGANetSendFrame(conn, id, payload, len);
+		} else if (id == GGA_NET_INPUT || id == GGA_NET_TICK || id == GGA_NET_HASH) {
+			/* v2 tick protocol: echo verbatim so the client exercises
+			 * both directions of the codec. */
 			GGANetSendFrame(conn, id, payload, len);
 		} else if (id == GGA_NET_STATE_REQ) {
 			static uint8_t blob[60000];
@@ -188,6 +193,52 @@ int main(void) {
 		if (payload[i] != (uint8_t) (i * 31 + 7)) {
 			printf("FAIL: blob byte %zu\n", i);
 			return 1;
+		}
+	}
+
+	/* 6. v2 tick protocol round-trips (TICK, INPUT, HASH) */
+	{
+		uint16_t keys[GGA_NET_MAX_PLAYERS] = { 0x0001, 0x8002, 0x0000, 0x03FF };
+		uint16_t backKeys[GGA_NET_MAX_PLAYERS];
+		uint32_t hashes[GGA_NET_MAX_PLAYERS] = { 0xDEADBEEFu, 0x12345678u, 0xFFFFFFFFu, 0 };
+		uint32_t backHashes[GGA_NET_MAX_PLAYERS];
+		uint32_t frame = 0;
+		uint16_t oneKey = 0;
+		uint8_t n = 0;
+		int i;
+
+		CHECK(GGANetSendTick(conn, 4242, keys, 4));
+		CHECK(GGANetRecvTick(conn, &frame, backKeys, &n, 5000));
+		CHECK(frame == 4242 && n == 4);
+		for (i = 0; i < GGA_NET_MAX_PLAYERS; ++i) {
+			CHECK(backKeys[i] == keys[i]);
+		}
+
+		CHECK(GGANetSendInput(conn, 777, 0x0210));
+		CHECK(GGANetRecvInput(conn, &frame, &oneKey, 5000));
+		CHECK(frame == 777 && oneKey == 0x0210);
+
+		CHECK(GGANetSendHash(conn, 900, hashes, 3));
+		CHECK(GGANetRecvHash(conn, &frame, backHashes, &n, 5000));
+		CHECK(frame == 900 && n == 3);
+		for (i = 0; i < 3; ++i) {
+			CHECK(backHashes[i] == hashes[i]);
+		}
+
+		/* A bad player count is rejected before it reaches the wire... */
+		CHECK(!GGANetSendTick(conn, 1, keys, 0));
+		CHECK(!GGANetSendTick(conn, 1, keys, GGA_NET_MAX_PLAYERS + 1));
+		CHECK(!GGANetSendHash(conn, 1, hashes, 0));
+
+		/* ...and a malformed frame from the peer is rejected by the
+		 * decoder. The echo server bounces it back verbatim. */
+		{
+			uint8_t badTick[5] = { 0, 0, 0, 0, 0 };
+			uint8_t badHash[GGA_NET_HASH_HEADER] = { 0, 0, 0, 0, 0 };
+			CHECK(GGANetSendFrame(conn, GGA_NET_TICK, badTick, sizeof(badTick)));
+			CHECK(!GGANetRecvTick(conn, 0, 0, 0, 5000));
+			CHECK(GGANetSendFrame(conn, GGA_NET_HASH, badHash, sizeof(badHash)));
+			CHECK(!GGANetRecvHash(conn, 0, 0, 0, 5000));
 		}
 	}
 
