@@ -12,10 +12,14 @@
  *      whose sleep() merely parks a core, so the runner can interleave);
  *   2. local determinism: the same run twice yields identical state
  *      hashes (a deterministic RTC seed is applied before reset);
- *   3. frame drain and per-player state hashing.
+ *   3. frame drain and per-player state hashing. --siotest goes further
+ *      and drives a real MULTI exchange (each core ends up holding every
+ *      player's SIOMLT_SEND byte, with no core left parked), so the data
+ *      path is exercised and not just the barrier.
  *
  * Build (Linux/WSL): scripts/wsl-build-linksession.sh (mod-coop helper)
  * Usage: link-session ROM BIOS FRAMES [KEYMASK_HEX] [--twice] [--nolink]
+ *        link-session ROM BIOS FRAMES --siotest [--twice]
  */
 #include <mgba/core/config.h>
 #include <mgba/core/core.h>
@@ -23,6 +27,9 @@
 #include <mgba/core/log.h>
 #include <mgba-util/vfs.h>
 #include <mgba/gba/interface.h>
+#include <mgba/internal/gba/gba.h>
+#include <mgba/internal/gba/io.h>
+#include <mgba/internal/gba/sio.h>
 #include <mgba/internal/gba/sio/lockstep.h>
 
 #include <fcntl.h>
@@ -47,6 +54,7 @@ static void _quietLog(struct mLogger* logger, int category, enum mLogLevel level
 static struct mLogger _quietLogger = { .log = _quietLog };
 
 static bool g_noLink;
+static bool g_sioTest;
 
 #define SESSION_MAX 4
 
@@ -250,6 +258,57 @@ static uint32_t _stateHash(struct mCore* core) {
 	return h;
 }
 
+/* Drive a real MULTI transfer across the cores the way a game would:
+ * switch to MULTI mode, load SIOMLT_SEND, then have the master raise the
+ * start bit. Most link games use exactly this path, and a plain boot
+ * never reaches it (the BIOS probe is NORMAL/GPIO), so this is the only
+ * way to exercise the data exchange and its drain without a link ROM. */
+static void _runSioTest(struct Session* s) {
+	int i;
+	unsigned f;
+	struct GBA* g;
+
+	for (i = 0; i < s->n; ++i) {
+		g = s->c[i].core->board;
+		g->sio.p->memory.io[GBA_REG(SIOMLT_SEND)] = 0x0100 + i;
+		/* MULTI mode (bits 12-13), baud 1, own id in bits 4-5. */
+		GBASIOWriteSIOCNT(&g->sio, 0x2000 | (i << 4) | 0x0001);
+	}
+	/* Let the coordinator process SIO_EV_MODE_SET before a start. */
+	for (f = 0; f < 2; ++f) {
+		if (!_runFrameGroup(s, 0)) {
+			return;
+		}
+	}
+	printf("siotest: mode=%d active=%d waiting=%x\n",
+		s->coord.transferMode, s->coord.transferActive, s->coord.waiting);
+
+	/* Master raises the start bit; the lockstep barrier does the rest. */
+	g = s->c[0].core->board;
+	GBASIOWriteSIOCNT(&g->sio, 0x2000 | 0x0001 | 0x0080);
+	for (f = 0; f < 5; ++f) {
+		if (!_runFrameGroup(s, 0)) {
+			return;
+		}
+	}
+
+	printf("siotest: multiData=%04X %04X %04X %04X\n",
+		s->coord.multiData[0], s->coord.multiData[1],
+		s->coord.multiData[2], s->coord.multiData[3]);
+	bool ok = true;
+	for (i = 0; i < s->n; ++i) {
+		g = s->c[i].core->board;
+		uint16_t m0 = g->sio.p->memory.io[GBA_REG(SIOMULTI0)];
+		uint16_t m1 = g->sio.p->memory.io[GBA_REG(SIOMULTI1)];
+		printf("siotest: core%d SIOMULTI0=%04X SIOMULTI1=%04X%s\n", i, m0, m1,
+			(m0 != 0x0100 || m1 != 0x0101) ? "  <-- MISS" : "");
+		if (m0 != 0x0100 || m1 != 0x0101) {
+			ok = false;
+		}
+	}
+	printf("siotest: %s\n", ok ? "MULTI exchange OK" : "MULTI exchange FAILED");
+}
+
 static bool _runOnce(const char* rom, const char* bios, unsigned frames, uint32_t keys,
 	uint32_t out[SESSION_MAX], struct Session* outStats) {
 	static struct Session s;
@@ -276,6 +335,10 @@ static bool _runOnce(const char* rom, const char* bios, unsigned frames, uint32_
 		}
 	}
 
+	if (g_sioTest && !g_noLink) {
+		_runSioTest(&s);
+	}
+
 	for (i = 0; i < s.n; ++i) {
 		out[i] = _stateHash(s.c[i].core);
 	}
@@ -295,7 +358,7 @@ int main(int argc, char** argv) {
 	setvbuf(stderr, NULL, _IONBF, 0);
 	mLogSetDefaultLogger(&_quietLogger);
 	if (argc < 4) {
-		printf("usage: %s ROM BIOS FRAMES [KEYMASK_HEX] [--twice] [--nolink]\n", argv[0]);
+		printf("usage: %s ROM BIOS FRAMES [KEYMASK_HEX] [--twice] [--nolink] [--siotest]\n", argv[0]);
 		return 2;
 	}
 	const char* rom = argv[1];
@@ -309,6 +372,8 @@ int main(int argc, char** argv) {
 			twice = true;
 		} else if (!strcmp(argv[i], "--nolink")) {
 			g_noLink = true;
+		} else if (!strcmp(argv[i], "--siotest")) {
+			g_sioTest = true;
 		} else {
 			keys = (uint32_t) strtoul(argv[i], NULL, 16);
 		}
