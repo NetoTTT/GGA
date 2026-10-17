@@ -1010,6 +1010,18 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 		}
 	}
 
+	/* GGA: remote clock owner. The local player is a slave and player 0
+	 * is a proxy with no local thread, so nothing here advances the
+	 * shared cycle: it drifts behind our own time, _untilNextSync goes
+	 * negative, and nextEvent clamps to 1 — the core then grinds one
+	 * cycle per lockstep event. Re-anchor to our own time (mirrors the
+	 * pump-side re-anchor) so the core runs at full speed between
+	 * transfer barriers. Never while a transfer is in flight: those
+	 * windows need a stable cycle. */
+	if (coordinator->remoteClock && player->playerId != 0 && !coordinator->transferActive) {
+		coordinator->cycle = GBASIOLockstepTime(player) + LOCKSTEP_INTERVAL;
+	}
+
 	int32_t nextEvent = _untilNextSync(coordinator, player);
 	while (true) {
 		struct GBASIOLockstepEvent* event = player->queue;

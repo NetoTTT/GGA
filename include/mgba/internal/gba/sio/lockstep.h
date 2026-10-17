@@ -40,6 +40,13 @@ struct GBASIOLockstepCoordinator {
 	bool transferActive;
 	enum GBASIOMode transferMode;
 
+	/* GGA: set by the network driver. When true the local player is not
+	 * player 0 (the clock owner is a remote proxy with no local thread),
+	 * so nothing advances `cycle` on the core thread. The slave then
+	 * re-anchors `cycle` to its own time each lockstep event instead of
+	 * starving on a negative next-event. Unused by local lockstep. */
+	bool remoteClock;
+
 	int32_t cycle;
 	int32_t nextHardSync;
 

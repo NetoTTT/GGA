@@ -67,6 +67,10 @@ void GBASIONetLinkInit(struct GBASIONetLink* link, struct GBASIOLockstepCoordina
 	struct GBASIOLockstepDriver* realDriver, struct mLockstepUser* chainedUser) {
 	memset(link, 0, sizeof(*link));
 	link->coordinator = coordinator;
+	/* GGA: this coordinator's clock owner is always a remote proxy (or,
+	 * on the host, this very machine's player 0). Mark it so a local
+	 * slave re-anchors its own cycle instead of starving. */
+	coordinator->remoteClock = true;
 	link->realDriver = realDriver;
 	link->chainedUser = chainedUser;
 	link->chainUser.sleep = _chainSleep;
@@ -292,6 +296,10 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 	if (link->transferSeen && !link->coordinator->transferActive) {
 		/* Transfer just completed: everyone (including us) agreed. */
 		if (link->isHost) {
+			/* TEMP DIAG (revert): what did the games actually exchange? */
+			fprintf(stderr, "DBG result multi=%04X %04X %04X %04X\n",
+				link->coordinator->multiData[0], link->coordinator->multiData[1],
+				link->coordinator->multiData[2], link->coordinator->multiData[3]);
 			_broadcastResult(link);
 		}
 		link->transferSeen = false;
