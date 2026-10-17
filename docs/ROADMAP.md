@@ -55,9 +55,15 @@ hashes (host-authoritative ticks).
       with its keys `GGA_NET_INPUT_DELAY` frames ahead, and a stalled guest
       caps the host at `GGA_NET_TICK_AHEAD` frames instead of letting it run
       away. Covered by `gga/netsession-test.c` (keys land on the exact frame,
-      host capped at frame 9 with the guest stalled). 4P, desync detection and
-      the Qt multi-core view are still open.
-- [ ] Desync detection (per-player hashes, stop-on-mismatch)
+      host capped at frame 9 with the guest stalled). 4P and the Qt multi-core
+      view are still open.
+- [x] Desync detection (per-player hashes, stop-on-mismatch):
+      `GBASIONetSessionFrameDone` samples every `GGA_NET_HASH_INTERVAL` frames
+      and each side compares both copies as they arrive, whichever lands
+      second; a mismatch sets `desync` and stops the session without resyncing.
+      The same test compares 130 clean frames and then trips the host on a
+      deliberately corrupted guest hash.
+- [ ] Detach + session lifecycle; then 4P
 - [ ] Detach + session lifecycle; then 4P
 
 ## Phase 2 — Android frontend
