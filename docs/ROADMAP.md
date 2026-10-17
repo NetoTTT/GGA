@@ -37,7 +37,12 @@ See `docs/NETPLAY-ARCHITECTURE.md`. Every client runs all linked cores
 locally; the network carries startup blobs, per-frame inputs, and state
 hashes (host-authoritative ticks).
 
-- [ ] Input-sync driver skeleton (N local cores, local input, no network)
+- [x] Input-sync driver skeleton (N local cores, local input, no network):
+      `gga/link-session.c` runs two cores plus one lockstep coordinator in a
+      single thread, drives them a frame at a time with local input, and proves
+      local determinism (identical state hashes across runs). `--siotest` also
+      drives a real MULTI exchange, so the data path and its drain are covered,
+      not just the park/ack barrier.
 - [ ] Startup blob exchange (ROM + save + deterministic RTC seed)
 - [ ] Host tick authority + guest tick buffer + backpressure
 - [ ] Desync detection (per-player hashes, stop-on-mismatch)
