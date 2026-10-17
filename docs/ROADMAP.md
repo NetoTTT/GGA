@@ -72,6 +72,17 @@ hashes (host-authoritative ticks).
       departing peer ends a 2-player session; `NextFrame` stays false after.
       Covered by `gga/netsession-test.c`, which kills the guest both ways
       (graceful `BYE` -> `PEER_BYE`, bare socket close -> `PEER_GONE`).
+- [x] Local lockstep runner for v2 sessions (`netrunner.c`):
+      `GBASIONetRunner` owns N cores and advances them a frame at a time with
+      the coordinator's cooperative park/wake, driven by an optional
+      `GBASIONetSession` (its key masks when set, a fixed mask otherwise) and
+      reporting real `saveState` hashes on the session's sampling frames.
+      Covered by `gga/netrunner-test.c`: two cores stay in lockstep through a
+      real MULTI exchange and hash the same across runs, then two independent
+      clients - each running both players' cores - talk over TCP loopback and
+      match their real hashes clean. The Qt frontend still runs one core per
+      `mCoreThread`; wiring the runner in (second core + second view, ROM/save
+      blobs) is the next step.
 - [ ] 4P + crossplay (PC/mobile) + soak
 
 ## Phase 2 — Android frontend
