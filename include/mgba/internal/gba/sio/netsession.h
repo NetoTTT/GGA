@@ -43,6 +43,10 @@ struct GBASIONetEndpoint;
 /* How long the host waits for a frame's guest input before using the idle
  * mask. The guest keeps running while it waits, so this only spends slack. */
 #define GGA_NET_INPUT_DEADLINE_MS 50
+/* Hash every this many frames, comparing each player's state separately so a
+ * divergence points at a culprit. */
+#define GGA_NET_HASH_INTERVAL 60
+#define GGA_NET_HASH_WINDOW 64
 
 enum GGANetSessionRole {
 	GGA_NET_SESSION_HOST = 0,
@@ -67,6 +71,14 @@ struct GBASIONetSession {
 	bool paused;
 	bool stopped;
 	bool failed; /* protocol violation: stop and warn */
+	bool desync; /* state hashes disagreed: stop and warn */
+
+	/* Sampled frames only, indexed by sample / INTERVAL % WINDOW. */
+	uint32_t hashFrame[GGA_NET_HASH_WINDOW];
+	uint32_t hashMine[GGA_NET_HASH_WINDOW][GGA_NET_MAX_PLAYERS];
+	uint32_t hashTheirs[GGA_NET_HASH_WINDOW][GGA_NET_MAX_PLAYERS];
+	bool hashMineValid[GGA_NET_HASH_WINDOW];
+	bool hashTheirsValid[GGA_NET_HASH_WINDOW];
 
 	/* Host: guest announcements, indexed by frame % WINDOW. */
 	uint32_t guestFrame[GGA_NET_TICK_WINDOW];
@@ -99,6 +111,13 @@ void GBASIONetSessionSetLocalInput(struct GBASIONetSession* sess, uint16_t keys)
 bool GBASIONetSessionNextFrame(struct GBASIONetSession* sess, uint16_t* keys);
 uint32_t GBASIONetSessionFrame(const struct GBASIONetSession* sess);
 
+/* Report the per-player state hashes for the frame that just ran. Every
+ * GGA_NET_HASH_INTERVAL frames this also sends them, and the peer's copy is
+ * compared on arrival; a mismatch sets `desync`. Call after every frame, with
+ * one hash per player, in player order. */
+void GBASIONetSessionFrameDone(struct GBASIONetSession* sess, const uint32_t* hashes,
+	uint8_t nPlayers);
+
 /* Host: announce a pause/resume to the guest; both sides stop stepping
  * while paused. */
 void GBASIONetSessionSetPaused(struct GBASIONetSession* sess, bool paused);
@@ -109,6 +128,8 @@ void GBASIONetSessionStop(struct GBASIONetSession* sess, uint8_t reason);
 void GBASIONetSessionOnInput(struct GBASIONetSession* sess, uint32_t frame, uint16_t keys);
 void GBASIONetSessionOnTick(struct GBASIONetSession* sess, uint32_t frame,
 	const uint16_t* keys, uint8_t nPlayers);
+void GBASIONetSessionOnHash(struct GBASIONetSession* sess, uint32_t frame,
+	const uint32_t* hashes, uint8_t nPlayers);
 void GBASIONetSessionOnControl(struct GBASIONetSession* sess, uint8_t id, uint8_t reason);
 
 CXX_GUARD_END

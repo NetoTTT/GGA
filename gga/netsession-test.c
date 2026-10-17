@@ -1,4 +1,5 @@
-/* v2 input-sync session: host tick authority, guest buffering, backpressure.
+/* v2 input-sync session: host tick authority, guest buffering, backpressure,
+ * and desync detection.
  *
  * No emulated cores. Two sessions (host + guest) talk over TCP loopback
  * while a synthetic clock and a trivial "frame" stand in for the emulation
@@ -18,8 +19,11 @@
 #include <unistd.h>
 
 #define LIMIT 61
+#define HASH_LIMIT 130
 #define PORT_A 27195
 #define PORT_B 27194
+#define PORT_C 27193
+#define PORT_D 27192
 #define HOST_KEY(f) ((uint16_t) (0x100 + (f)))
 #define GUEST_KEY(f) ((uint16_t) (0x200 + (f)))
 
@@ -206,12 +210,104 @@ static bool _testBackpressure(void) {
 	return true;
 }
 
+/* Phase C/D: exchange per-frame hashes. Both sides hash the same keys, so
+ * the verdict must be clean; with the guest's hash corrupted on purpose the
+ * host has to notice at the first sample and stop. */
+static bool _testHash(bool corrupt) {
+	uint16_t keys[GGA_NET_MAX_PLAYERS];
+	uint32_t hashes[GGA_NET_MAX_PLAYERS];
+	int i;
+	int compared = 0;
+
+	if (_setup(&g_he, &g_ge, corrupt ? PORT_D : PORT_C)) {
+		return false;
+	}
+	GBASIONetSessionInit(&g_hs, GGA_NET_SESSION_HOST, 0, 2, _nowMs, 0);
+	GBASIONetSessionInit(&g_gs, GGA_NET_SESSION_GUEST, 1, 2, _nowMs, 0);
+	g_hs.inputDeadlineMs = 5;
+	g_gs.inputDeadlineMs = 5;
+	GBASIONetSessionSetPeer(&g_hs, &g_he);
+	GBASIONetSessionSetPeer(&g_gs, &g_ge);
+	GBASIONetSessionSetLocalInput(&g_gs, GUEST_KEY(0));
+	GBASIONetSessionStart(&g_gs);
+
+	for (i = 0; i < 50000; ++i) {
+		uint32_t hf = GBASIONetSessionFrame(&g_hs);
+		uint32_t gf = GBASIONetSessionFrame(&g_gs);
+		int p;
+		if (hf >= HASH_LIMIT && gf >= HASH_LIMIT) {
+			break;
+		}
+		/* Keep polling after a desync so the other side's copy lands too
+		 * and both ends reach the same verdict. */
+		if (g_hs.desync && g_gs.desync) {
+			break;
+		}
+		++g_now;
+		GBASIONetEndpointPoll(&g_ge);
+		GBASIONetEndpointPoll(&g_he);
+
+		if (hf < HASH_LIMIT) {
+			GBASIONetSessionSetLocalInput(&g_hs, HOST_KEY(hf));
+			if (GBASIONetSessionNextFrame(&g_hs, keys)) {
+				for (p = 0; p < 2; ++p) {
+					hashes[p] = GGANetHash32(&keys[p], 2);
+				}
+				GBASIONetSessionFrameDone(&g_hs, hashes, 2);
+			}
+		}
+		if (gf < HASH_LIMIT) {
+			GBASIONetSessionSetLocalInput(&g_gs, GUEST_KEY(gf));
+			if (GBASIONetSessionNextFrame(&g_gs, keys)) {
+				for (p = 0; p < 2; ++p) {
+					hashes[p] = GGANetHash32(&keys[p], 2);
+				}
+				if (corrupt) {
+					hashes[0] ^= 1;
+				}
+				GBASIONetSessionFrameDone(&g_gs, hashes, 2);
+			}
+		}
+	}
+
+	if (corrupt) {
+		CHECK(g_hs.desync);
+		CHECK(GBASIONetSessionFrame(&g_hs) < HASH_LIMIT); /* it stopped */
+		_teardown();
+		printf("  desync: host caught the bad hash at frame %u\n",
+			GBASIONetSessionFrame(&g_hs));
+		return true;
+	}
+
+	CHECK(!g_hs.desync && !g_gs.desync);
+	CHECK(!g_hs.failed && !g_gs.failed);
+	for (i = 0; i < GGA_NET_HASH_WINDOW; ++i) {
+		if (g_hs.hashMineValid[i] && g_hs.hashTheirsValid[i]) {
+			++compared;
+		}
+	}
+	CHECK(compared >= 2); /* frames 59 and 119 */
+	CHECK(GBASIONetSessionFrame(&g_hs) >= HASH_LIMIT);
+	_teardown();
+	printf("  hashes: %d samples compared clean across %u frames\n",
+		compared, GBASIONetSessionFrame(&g_hs));
+	return true;
+}
+
 int main(void) {
 	if (!_testPipeline()) {
 		_teardown();
 		return 1;
 	}
 	if (!_testBackpressure()) {
+		_teardown();
+		return 1;
+	}
+	if (!_testHash(false)) {
+		_teardown();
+		return 1;
+	}
+	if (!_testHash(true)) {
 		_teardown();
 		return 1;
 	}

@@ -157,13 +157,70 @@ static bool _runGuest(struct GBASIONetSession* sess, uint16_t* keys) {
 }
 
 bool GBASIONetSessionNextFrame(struct GBASIONetSession* sess, uint16_t* keys) {
-	if (sess->failed || sess->stopped || sess->paused) {
+	if (sess->failed || sess->stopped || sess->paused || sess->desync) {
 		return false;
 	}
 	if (sess->role == GGA_NET_SESSION_HOST) {
 		return _runHost(sess, keys);
 	}
 	return _runGuest(sess, keys);
+}
+
+/* Record one side's sampled-frame hashes and compare as soon as both sides
+ * are in, so a divergence is caught whichever copy arrives last. */
+static void _hashNote(struct GBASIONetSession* sess, uint32_t frame, bool mine,
+	const uint32_t* hashes, uint8_t nPlayers) {
+	uint32_t slot = (frame / GGA_NET_HASH_INTERVAL) % GGA_NET_HASH_WINDOW;
+	if (sess->hashFrame[slot] != frame) {
+		sess->hashFrame[slot] = frame;
+		sess->hashMineValid[slot] = false;
+		sess->hashTheirsValid[slot] = false;
+	}
+	if (mine) {
+		memcpy(sess->hashMine[slot], hashes, sizeof(uint32_t) * nPlayers);
+		sess->hashMineValid[slot] = true;
+	} else {
+		memcpy(sess->hashTheirs[slot], hashes, sizeof(uint32_t) * nPlayers);
+		sess->hashTheirsValid[slot] = true;
+	}
+	if (sess->hashMineValid[slot] && sess->hashTheirsValid[slot] &&
+		memcmp(sess->hashMine[slot], sess->hashTheirs[slot], sizeof(uint32_t) * nPlayers) != 0) {
+		sess->desync = true;
+	}
+}
+
+void GBASIONetSessionFrameDone(struct GBASIONetSession* sess, const uint32_t* hashes,
+	uint8_t nPlayers) {
+	uint8_t pay[GGA_NET_HASH_HEADER + 4 * GGA_NET_MAX_PLAYERS];
+	uint32_t f;
+	uint8_t i;
+
+	if (sess->desync || sess->frame == 0 || nPlayers != sess->nPlayers) {
+		return;
+	}
+	f = sess->frame - 1; /* the frame that just ran */
+	if (sess->frame % GGA_NET_HASH_INTERVAL != 0) {
+		return;
+	}
+	_hashNote(sess, f, true, hashes, nPlayers);
+	if (!sess->peer) {
+		return;
+	}
+	GGANetStoreU32(&pay[0], f);
+	pay[4] = nPlayers;
+	for (i = 0; i < nPlayers; ++i) {
+		GGANetStoreU32(&pay[GGA_NET_HASH_HEADER + 4 * i], hashes[i]);
+	}
+	GBASIONetEndpointSend(sess->peer, GGA_NET_HASH, pay,
+		(uint16_t) (GGA_NET_HASH_HEADER + 4 * nPlayers));
+}
+
+void GBASIONetSessionOnHash(struct GBASIONetSession* sess, uint32_t frame,
+	const uint32_t* hashes, uint8_t nPlayers) {
+	if (sess->desync || !nPlayers || nPlayers != sess->nPlayers) {
+		return;
+	}
+	_hashNote(sess, frame, false, hashes, nPlayers);
 }
 
 void GBASIONetSessionOnInput(struct GBASIONetSession* sess, uint32_t frame, uint16_t keys) {

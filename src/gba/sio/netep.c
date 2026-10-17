@@ -533,6 +533,23 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 		}
 		break;
 	}
+	case 0x2A: { /* HASH (both): [u32 frame][u8 n][u32 hash x n] */
+		uint8_t n;
+		if (!ep->session || len < GGA_NET_HASH_HEADER) {
+			break;
+		}
+		n = pay[4];
+		if (!n || n > GGA_NET_MAX_PLAYERS || len != GGA_NET_HASH_HEADER + 4 * n) {
+			break;
+		}
+		uint32_t hashes[GGA_NET_MAX_PLAYERS] = { 0 };
+		uint8_t i;
+		for (i = 0; i < n; ++i) {
+			hashes[i] = GGANetLoadU32(&pay[GGA_NET_HASH_HEADER + 4 * i]);
+		}
+		GBASIONetSessionOnHash(ep->session, GGANetLoadU32(pay), hashes, n);
+		break;
+	}
 	case 0x2B: /* PAUSE */
 	case 0x2C: /* RESUME */
 	case 0x2D: /* STOP */
