@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include <mgba/internal/gba/sio/net.h>
 
+#include <stdlib.h>
 #include <string.h>
 
 void GGANetStoreU16(void* dest, uint16_t value) {
@@ -137,7 +138,7 @@ bool GGANetSendTransfer(Socket sock, int32_t cycle, uint8_t slot, uint16_t data)
 	GGANetStoreI32(&payload[0], cycle);
 	payload[4] = slot;
 	GGANetStoreU16(&payload[5], data);
-	return GGANetSendFrame(sock, GGA_NET_TRANSFER, payload, sizeof(payload));
+	return GGANetSendFrame(sock, GGA_NET_TRANSFER_START, payload, sizeof(payload));
 }
 
 bool GGANetSendEvent(Socket sock, uint8_t type, uint8_t player, int32_t arg) {
@@ -156,4 +157,146 @@ bool GGANetSendHeartbeat(Socket sock, int32_t cycle) {
 
 bool GGANetSendBye(Socket sock, uint8_t reason) {
 	return GGANetSendFrame(sock, GGA_NET_BYE, &reason, 1);
+}
+
+uint32_t GGANetHash32(const void* data, size_t len) {
+	const uint8_t* p = data;
+	uint32_t h = 0x811C9DC5u;
+	size_t i;
+	for (i = 0; i < len; ++i) {
+		h = (h ^ p[i]) * 16777619u;
+	}
+	return h;
+}
+
+bool GGANetSendBlobChunk(Socket sock, uint8_t kind, uint32_t total, uint32_t offset,
+	uint32_t hash, const void* data, uint16_t len) {
+	uint8_t payload[GGA_NET_BLOB_HEADER + GGA_NET_BLOB_CHUNK];
+	if (len > GGA_NET_BLOB_CHUNK) {
+		return false;
+	}
+	payload[0] = kind;
+	GGANetStoreU32(&payload[1], total);
+	GGANetStoreU32(&payload[5], offset);
+	GGANetStoreU32(&payload[9], hash);
+	if (len) {
+		memcpy(&payload[GGA_NET_BLOB_HEADER], data, len);
+	}
+	return GGANetSendFrame(sock, GGA_NET_BLOB, payload, (uint16_t) (GGA_NET_BLOB_HEADER + len));
+}
+
+bool GGANetSendBlob(Socket sock, uint8_t kind, const void* data, size_t len) {
+	const uint8_t* bytes = data;
+	uint32_t hash;
+	uint32_t off = 0;
+	if (len > 0xFFFFFFFFu) {
+		return false;
+	}
+	hash = GGANetHash32(data, len);
+	/* An empty blob still sends one header-only chunk so the peer sees a
+	 * complete transfer (and its zero-length hash). */
+	do {
+		uint16_t n;
+		if (len - off > GGA_NET_BLOB_CHUNK) {
+			n = GGA_NET_BLOB_CHUNK;
+		} else {
+			n = (uint16_t) (len - off);
+		}
+		if (!GGANetSendBlobChunk(sock, kind, (uint32_t) len, off, hash, bytes + off, n)) {
+			return false;
+		}
+		off += n;
+	} while (off < len);
+	return true;
+}
+
+bool GGANetRecvBlob(Socket sock, uint8_t* kind, void** dataOut, size_t* lenOut, int64_t timeoutMs) {
+	uint8_t payload[GGA_NET_BLOB_HEADER + GGA_NET_BLOB_CHUNK];
+	uint8_t* buf = 0;
+	uint8_t blobKind = 0;
+	uint32_t total = 0;
+	uint32_t hash = 0;
+	size_t got = 0;
+	bool started = false;
+
+	for (;;) {
+		uint8_t id;
+		uint16_t len;
+		uint32_t off;
+		uint16_t n;
+		if (!GGANetRecvFrame(sock, &id, payload, &len, timeoutMs) || id != GGA_NET_BLOB) {
+			free(buf);
+			return false;
+		}
+		if (len < GGA_NET_BLOB_HEADER) {
+			free(buf);
+			return false;
+		}
+		if (!started) {
+			blobKind = payload[0];
+			total = GGANetLoadU32(&payload[1]);
+			hash = GGANetLoadU32(&payload[9]);
+			if (total > 32 * 1024 * 1024) {
+				return false;
+			}
+			buf = malloc(total ? total : 1);
+			if (!buf) {
+				return false;
+			}
+			started = true;
+		}
+		off = GGANetLoadU32(&payload[5]);
+		n = len - GGA_NET_BLOB_HEADER;
+		if (off > total || n > total - off) {
+			free(buf);
+			return false;
+		}
+		memcpy(buf + off, &payload[GGA_NET_BLOB_HEADER], n);
+		if (off + n > got) {
+			got = off + n;
+		}
+		if (got >= total) {
+			break;
+		}
+	}
+
+	if (GGANetHash32(buf, total) != hash) {
+		free(buf);
+		return false;
+	}
+	if (kind) {
+		*kind = blobKind;
+	}
+	if (lenOut) {
+		*lenOut = total;
+	}
+	if (dataOut) {
+		*dataOut = buf;
+	} else {
+		free(buf);
+	}
+	return true;
+}
+
+bool GGANetSendRtcSeed(Socket sock, int64_t epochMs) {
+	uint64_t ms = (uint64_t) epochMs;
+	uint8_t payload[8];
+	GGANetStoreU32(&payload[0], (uint32_t) (ms >> 32));
+	GGANetStoreU32(&payload[4], (uint32_t) ms);
+	return GGANetSendFrame(sock, GGA_NET_RTC_SEED, payload, sizeof(payload));
+}
+
+bool GGANetRecvRtcSeed(Socket sock, int64_t* epochMs, int64_t timeoutMs) {
+	uint8_t payload[8];
+	uint8_t id;
+	uint16_t len;
+	uint64_t ms;
+	if (!GGANetRecvFrame(sock, &id, payload, &len, timeoutMs) || id != GGA_NET_RTC_SEED || len != 8) {
+		return false;
+	}
+	ms = ((uint64_t) GGANetLoadU32(&payload[0]) << 32) | GGANetLoadU32(&payload[4]);
+	if (epochMs) {
+		*epochMs = (int64_t) ms;
+	}
+	return true;
 }
