@@ -1,5 +1,13 @@
 # GGA Netplay — network link driver (Phase 1 design)
 
+> **Status: superseded (2026-10-17).** The *sync model* below (forward
+> every SIO transfer over the wire) is v1 and is kept as historical
+> reference plus the transport/handshake we still reuse. Netplay now
+> targets **deterministic input netplay** (v2) — see
+> [`NETPLAY-ARCHITECTURE.md`](NETPLAY-ARCHITECTURE.md) for the decision,
+> evidence, and phased plan. The wire IDs and barrier/ack policy here
+> remain useful background.
+
 ## Where it plugs in
 
 `src/gba/sio/lockstep.c` already implements deterministic 4-player link
