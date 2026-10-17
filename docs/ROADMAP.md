@@ -47,8 +47,10 @@ hashes (host-authoritative ticks).
       `GGANetSendBlob`/`GGANetRecvBlob` chunk with a whole-blob hash, and
       `netep.c` ships the RTC seed plus the ROM and save right after WELCOME
       (new `GBASIONetTransport` blob/RTC callbacks). Covered by
-      `gga/net-selftest.c` and `gga/ep-blob-test.c`. The Qt LAN tab still has
-      to supply the callbacks.
+      `gga/net-selftest.c` and `gga/ep-blob-test.c`. The Qt LAN tab supplies
+      the RTC seed pair (`CoreController::transportGetRtcSeed` /
+      `transportLoadRtcSeed`, backed by a shared `mRTCSource` so both cores
+      read one clock); the ROM/save blobs are still unwired there.
 - [x] Host tick authority + guest tick buffer + backpressure:
       2-player `netsession.c` in the core: the host resolves one key mask per
       player per frame, the guest runs a tick only when it arrives and answers
