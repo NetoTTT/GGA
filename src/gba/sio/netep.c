@@ -8,6 +8,7 @@
 #include <mgba/core/log.h>
 #include <mgba/internal/gba/sio/net.h>
 #include <mgba/internal/gba/sio/netdriver.h>
+#include <mgba/internal/gba/sio/netsession.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -128,6 +129,10 @@ static bool _outboxAppend(struct GBASIONetEndpoint* ep, uint8_t id, const void* 
 		ep->outboxLen += len;
 	}
 	return true;
+}
+
+bool GBASIONetEndpointSend(struct GBASIONetEndpoint* ep, uint8_t id, const void* payload, uint16_t len) {
+	return _outboxAppend(ep, id, payload, len);
 }
 
 /* Queue a whole startup blob as GGA_NET_BLOB chunks. Mirrors the STATE
@@ -509,6 +514,30 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 		if (len >= 8 && link->transport.loadRtcSeed) {
 			uint64_t ms = ((uint64_t) GGANetLoadU32(&pay[0]) << 32) | GGANetLoadU32(&pay[4]);
 			link->transport.loadRtcSeed(link->transport.context, (int64_t) ms);
+		}
+		break;
+	case 0x28: /* INPUT (guest -> host) */
+		if (ep->session && len >= GGA_NET_INPUT_SIZE) {
+			GBASIONetSessionOnInput(ep->session, GGANetLoadU32(pay), GGANetLoadU16(&pay[4]));
+		}
+		break;
+	case 0x29: { /* TICK (host -> all): [u32 frame][u16 keys x n] */
+		if (ep->session && len >= 6 && (len - 4) % 2 == 0 && (len - 4) / 2 <= GGA_NET_MAX_PLAYERS) {
+			uint16_t keys[GGA_NET_MAX_PLAYERS] = { 0 };
+			uint8_t n = (uint8_t) ((len - 4) / 2);
+			uint8_t i;
+			for (i = 0; i < n; ++i) {
+				keys[i] = GGANetLoadU16(&pay[4 + 2 * i]);
+			}
+			GBASIONetSessionOnTick(ep->session, GGANetLoadU32(pay), keys, n);
+		}
+		break;
+	}
+	case 0x2B: /* PAUSE */
+	case 0x2C: /* RESUME */
+	case 0x2D: /* STOP */
+		if (ep->session && len >= 1) {
+			GBASIONetSessionOnControl(ep->session, id, pay[0]);
 		}
 		break;
 	case 0x06:

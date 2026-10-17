@@ -40,7 +40,8 @@ set(SIO_FILES
 	sio/lockstep.c
 	sio/net.c
 	sio/netdriver.c
-	sio/netep.c)
+	sio/netep.c
+	sio/netsession.c)
 
 set(EXTRA_FILES
 	extra/battlechip.c

@@ -29,6 +29,7 @@ CXX_GUARD_START
 #define GGA_NET_DEFER_PAY 32
 
 struct GBASIONetLink;
+struct GBASIONetSession;
 
 struct GGANetDeferred {
 	uint8_t id;
@@ -38,6 +39,9 @@ struct GGANetDeferred {
 
 struct GBASIONetEndpoint {
 	struct GBASIONetLink* link;
+	/* v2 input netplay: when set, INPUT/TICK/control frames are handed to
+	 * this session instead of the lockstep link. */
+	struct GBASIONetSession* session;
 	Socket listenSock;
 	Socket conn;
 	bool isHost;
@@ -91,6 +95,10 @@ bool GBASIONetEndpointConnect(struct GBASIONetEndpoint* ep, const char* host, in
 
 /* Pump once: accept (host), recv+dispatch, flush outbox, Poll(link). */
 void GBASIONetEndpointPoll(struct GBASIONetEndpoint* ep);
+
+/* Queue one frame for the peer without touching the sockets (safe to call
+ * between polls, e.g. from the emulation loop). Drained by Poll. */
+bool GBASIONetEndpointSend(struct GBASIONetEndpoint* ep, uint8_t id, const void* payload, uint16_t len);
 
 CXX_GUARD_END
 
