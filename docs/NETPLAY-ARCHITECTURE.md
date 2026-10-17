@@ -158,7 +158,8 @@ per client:
 | HELLO / WELCOME / REJECT | both | proto, core build, ROM hash |
 | BLOB (ROM + save) | both | per-player ROM + in-game save, chunked |
 | RTC_SEED | H→all | deterministic epoch applied before reset |
-| TICK | H→all | `frame`, `keys[players]` (bitmask per player) |
+| INPUT | G→H | `frame`, the guest's own `keys`; doubles as an ack |
+| TICK | H→all | `frame`, authoritative `keys[players]` for that frame |
 | HASH | both | `frame`, per-player state hash |
 | PAUSE / RESUME / STOP | H→all | session control |
 | DETACH | both | player left; keep session alive if safe |
@@ -176,12 +177,33 @@ it explicit in the UI, and never log or persist blobs.
 - same player assignment / role mapping;
 - same post-reset state.
 
-### Frame tick and backpressure
+### Tick protocol (concrete)
 
-Host applies its own input + buffered guest ticks, advances the local
-simulation, and emits the next `TICK`. Guests buffer a small number of
-ticks and apply the exact key masks in order. The host limits how far it
-runs ahead based on guest acks; broken tick order fails the session.
+Keys are a 16-bit active-high mask per player. Every device steps all
+linked cores together for one frame with the keys the router holds for
+that frame number, so the tick is the only thing that orders execution.
+
+Host:
+
+- frame F needs keys for every player: its own from local input, each
+  guest's from `INPUT(F)`.
+- the host emits `TICK(F)` once it holds every key for F, or when the
+  input deadline for F passes; a missing key becomes the idle mask
+  `0x0000` and the session is flagged as lagging rather than stalled.
+- the host never runs further ahead than `GGA_NET_TICK_AHEAD` (8) frames
+  of its slowest guest. `INPUT(F)` acks every tick below F, so the cap is
+  cheap: stop emitting F until `min(guestAck) >= F - TICK_AHEAD`.
+
+Guest:
+
+- buffers received ticks in order and runs frame F only when `TICK(F)`
+  has arrived, then immediately answers with `INPUT(F + 1)` — one message
+  both feeds the host and acks progress, so no separate ack is needed.
+- a duplicate tick below its current frame, or a gap it cannot fill,
+  fails the session.
+
+PAUSE/RESUME/STOP are session control from the host; a guest that has
+stopped keeps draining until `STOP` arrives so the shutdown is ordered.
 
 ### Transfer drain
 
@@ -198,9 +220,9 @@ session alive when the game tolerates a disconnected cable.
 
 ### Desync policy
 
-Compare per-player hashes every 60 frames. On mismatch: **stop and warn**;
-do not silently resync a session that may be mid-trade/mid-save. Optional
-"stop, export state, restart" flow later.
+Compare per-player hashes every 60 frames (`GGA_NET_HASH_INTERVAL`). On
+mismatch: **stop and warn**; do not silently resync a session that may be
+mid-trade/mid-save. Optional "stop, export state, restart" flow later.
 
 ## What we reuse vs rebuild
 
