@@ -404,6 +404,9 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 		if (len >= 1) {
 			ep->rejectReason = pay[0];
 		}
+		if (ep->session) {
+			GBASIONetSessionOnPeerGone(ep->session, GGA_NET_END_REJECT);
+		}
 		break;
 	case 0x20: /* TRANSFER_START */
 	case 0x21: /* TRANSFER_DATA */
@@ -561,6 +564,9 @@ static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* p
 	case 0x07:
 		if (id == 0x07) {
 			ep->peerBye = true;
+			if (ep->session) {
+				GBASIONetSessionOnPeerGone(ep->session, GGA_NET_END_PEER_BYE);
+			}
 		}
 		break;
 	default:
@@ -633,6 +639,9 @@ void GBASIONetEndpointPoll(struct GBASIONetEndpoint* ep) {
 peer_gone:
 	SocketClose(ep->conn);
 	ep->conn = INVALID_SOCKET;
+	if (ep->session) {
+		GBASIONetSessionOnPeerGone(ep->session, GGA_NET_END_PEER_GONE);
+	}
 	_flushOutbox(ep);
 polled:
 	_replayDeferred(ep);

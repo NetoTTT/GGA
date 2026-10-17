@@ -1,5 +1,5 @@
 /* v2 input-sync session: host tick authority, guest buffering, backpressure,
- * and desync detection.
+ * desync detection, and peer departure.
  *
  * No emulated cores. Two sessions (host + guest) talk over TCP loopback
  * while a synthetic clock and a trivial "frame" stand in for the emulation
@@ -13,6 +13,7 @@
 
 #include <mgba/internal/gba/sio/netep.h>
 #include <mgba/internal/gba/sio/netdriver.h>
+#include <mgba-util/socket.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -24,6 +25,8 @@
 #define PORT_B 27194
 #define PORT_C 27193
 #define PORT_D 27192
+#define PORT_E 27191
+#define PORT_F 27190
 #define HOST_KEY(f) ((uint16_t) (0x100 + (f)))
 #define GUEST_KEY(f) ((uint16_t) (0x200 + (f)))
 
@@ -294,6 +297,69 @@ static bool _testHash(bool corrupt) {
 	return true;
 }
 
+/* Phase E: a departing peer ends the session with a reason, whether it said
+ * goodbye first (BYE, then FIN) or just vanished. The frame counter must
+ * freeze either way. */
+static bool _testDetach(bool graceful) {
+	uint16_t keys[GGA_NET_MAX_PLAYERS];
+	int i;
+	uint32_t last;
+
+	if (_setup(&g_he, &g_ge, graceful ? PORT_E : PORT_F)) {
+		return false;
+	}
+	GBASIONetSessionInit(&g_hs, GGA_NET_SESSION_HOST, 0, 2, _nowMs, 0);
+	GBASIONetSessionInit(&g_gs, GGA_NET_SESSION_GUEST, 1, 2, _nowMs, 0);
+	g_hs.inputDeadlineMs = 5;
+	g_gs.inputDeadlineMs = 5;
+	GBASIONetSessionSetPeer(&g_hs, &g_he);
+	GBASIONetSessionSetPeer(&g_gs, &g_ge);
+	GBASIONetSessionSetLocalInput(&g_gs, GUEST_KEY(0));
+	GBASIONetSessionStart(&g_gs);
+
+	for (i = 0; i < 40; ++i) {
+		uint32_t hf = GBASIONetSessionFrame(&g_hs);
+		uint32_t gf = GBASIONetSessionFrame(&g_gs);
+		++g_now;
+		GBASIONetEndpointPoll(&g_ge);
+		GBASIONetEndpointPoll(&g_he);
+		GBASIONetSessionSetLocalInput(&g_hs, HOST_KEY(hf));
+		GBASIONetSessionNextFrame(&g_hs, keys);
+		GBASIONetSessionSetLocalInput(&g_gs, GUEST_KEY(gf));
+		GBASIONetSessionNextFrame(&g_gs, keys);
+	}
+	CHECK(!GBASIONetSessionEnded(&g_hs));
+	CHECK(GBASIONetSessionFrame(&g_hs) > 0);
+
+	if (graceful) {
+		GBASIONetEndpointClose(&g_ge); /* says BYE, then closes */
+	} else {
+		SocketClose(g_ge.conn); /* vanishes without a word */
+		g_ge.conn = INVALID_SOCKET;
+	}
+	for (i = 0; i < 40; ++i) {
+		++g_now;
+		GBASIONetEndpointPoll(&g_he);
+		GBASIONetSessionSetLocalInput(&g_hs, HOST_KEY(0));
+		GBASIONetSessionNextFrame(&g_hs, keys);
+	}
+
+	CHECK(GBASIONetSessionEnded(&g_hs));
+	CHECK(GBASIONetSessionEndReason(&g_hs) ==
+		(graceful ? GGA_NET_END_PEER_BYE : GGA_NET_END_PEER_GONE));
+	last = GBASIONetSessionFrame(&g_hs);
+	for (i = 0; i < 20; ++i) {
+		++g_now;
+		GBASIONetEndpointPoll(&g_he);
+		CHECK(!GBASIONetSessionNextFrame(&g_hs, keys));
+	}
+	CHECK(GBASIONetSessionFrame(&g_hs) == last);
+	_teardown();
+	printf("  detach: %s peer ended the session (#%u) at frame %u\n",
+		graceful ? "graceful" : "abrupt", GBASIONetSessionEndReason(&g_hs), last);
+	return true;
+}
+
 int main(void) {
 	if (!_testPipeline()) {
 		_teardown();
@@ -308,6 +374,14 @@ int main(void) {
 		return 1;
 	}
 	if (!_testHash(true)) {
+		_teardown();
+		return 1;
+	}
+	if (!_testDetach(true)) {
+		_teardown();
+		return 1;
+	}
+	if (!_testDetach(false)) {
 		_teardown();
 		return 1;
 	}

@@ -14,6 +14,30 @@ static int64_t _now(struct GBASIONetSession* sess) {
 	return sess->nowMs ? sess->nowMs(sess->context) : 0;
 }
 
+bool GBASIONetSessionEnded(const struct GBASIONetSession* sess) {
+	return sess->stopped || sess->failed || sess->desync;
+}
+
+uint8_t GBASIONetSessionEndReason(const struct GBASIONetSession* sess) {
+	return sess->endReason;
+}
+
+/* First reason wins: a desync that trips while the peer was already gone
+ * should not be rewritten by the later notice. */
+static void _end(struct GBASIONetSession* sess, uint8_t reason) {
+	if (!sess->endReason) {
+		sess->endReason = reason;
+	}
+	sess->stopped = true;
+}
+
+static void _fail(struct GBASIONetSession* sess) {
+	if (!sess->endReason) {
+		sess->endReason = GGA_NET_END_PROTOCOL;
+	}
+	sess->failed = true;
+}
+
 static void _sendControl(struct GBASIONetSession* sess, uint8_t id, uint8_t reason) {
 	if (sess->peer) {
 		GBASIONetEndpointSend(sess->peer, id, &reason, 1);
@@ -32,7 +56,7 @@ void GBASIONetSessionInit(struct GBASIONetSession* sess, int role, int localPlay
 	sess->waitSinceMs = -1;
 	/* 4-player link is Phase 7 of the architecture doc. */
 	if (nPlayers != 2 || localPlayer < 0 || localPlayer > 1) {
-		sess->failed = true;
+		_fail(sess);
 	}
 }
 
@@ -77,10 +101,10 @@ void GBASIONetSessionSetPaused(struct GBASIONetSession* sess, bool paused) {
 }
 
 void GBASIONetSessionStop(struct GBASIONetSession* sess, uint8_t reason) {
-	sess->stopped = true;
 	if (sess->role == GGA_NET_SESSION_HOST) {
 		_sendControl(sess, GGA_NET_STOP, reason);
 	}
+	_end(sess, GGA_NET_END_LOCAL);
 }
 
 /* Host: resolve frame `sess->frame` and broadcast it as the authoritative
@@ -185,6 +209,9 @@ static void _hashNote(struct GBASIONetSession* sess, uint32_t frame, bool mine,
 	}
 	if (sess->hashMineValid[slot] && sess->hashTheirsValid[slot] &&
 		memcmp(sess->hashMine[slot], sess->hashTheirs[slot], sizeof(uint32_t) * nPlayers) != 0) {
+		if (!sess->endReason) {
+			sess->endReason = GGA_NET_END_DESYNC;
+		}
 		sess->desync = true;
 	}
 }
@@ -232,7 +259,7 @@ void GBASIONetSessionOnInput(struct GBASIONetSession* sess, uint32_t frame, uint
 		return; /* already run (a late announcement, not an error) */
 	}
 	if (frame >= sess->frame + GGA_NET_TICK_WINDOW) {
-		sess->failed = true;
+		_fail(sess);
 		return;
 	}
 	slot = frame % GGA_NET_TICK_WINDOW;
@@ -254,11 +281,11 @@ void GBASIONetSessionOnTick(struct GBASIONetSession* sess, uint32_t frame,
 		return; /* duplicate of a frame we already ran */
 	}
 	if (frame >= sess->frame + GGA_NET_TICK_WINDOW) {
-		sess->failed = true; /* a gap we cannot fill */
+		_fail(sess); /* a gap we cannot fill */
 		return;
 	}
 	if (!nPlayers || nPlayers > GGA_NET_MAX_PLAYERS) {
-		sess->failed = true;
+		_fail(sess);
 		return;
 	}
 	slot = frame % GGA_NET_TICK_WINDOW;
@@ -279,9 +306,13 @@ void GBASIONetSessionOnControl(struct GBASIONetSession* sess, uint8_t id, uint8_
 		sess->waitSinceMs = -1;
 		break;
 	case GGA_NET_STOP:
-		sess->stopped = true;
+		_end(sess, GGA_NET_END_PEER_STOP);
 		break;
 	default:
 		break;
 	}
+}
+
+void GBASIONetSessionOnPeerGone(struct GBASIONetSession* sess, uint8_t endReason) {
+	_end(sess, endReason);
 }

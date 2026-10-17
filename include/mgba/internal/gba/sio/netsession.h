@@ -53,6 +53,18 @@ enum GGANetSessionRole {
 	GGA_NET_SESSION_GUEST = 1
 };
 
+/* Why a session ended, from GBASIONetSessionEndReason(). */
+enum GGANetSessionEnd {
+	GGA_NET_END_NONE = 0,
+	GGA_NET_END_LOCAL = 1, /* we stopped it ourselves */
+	GGA_NET_END_PEER_GONE = 2, /* the peer's socket died */
+	GGA_NET_END_PEER_BYE = 3,
+	GGA_NET_END_PEER_STOP = 4,
+	GGA_NET_END_REJECT = 5,
+	GGA_NET_END_DESYNC = 6,
+	GGA_NET_END_PROTOCOL = 7
+};
+
 struct GBASIONetSession {
 	int role;
 	int localPlayer;
@@ -72,6 +84,7 @@ struct GBASIONetSession {
 	bool stopped;
 	bool failed; /* protocol violation: stop and warn */
 	bool desync; /* state hashes disagreed: stop and warn */
+	uint8_t endReason; /* valid once ended; see GGANetSessionEnd */
 
 	/* Sampled frames only, indexed by sample / INTERVAL % WINDOW. */
 	uint32_t hashFrame[GGA_NET_HASH_WINDOW];
@@ -124,6 +137,12 @@ void GBASIONetSessionSetPaused(struct GBASIONetSession* sess, bool paused);
 /* End the session. The host tells the guest first. */
 void GBASIONetSessionStop(struct GBASIONetSession* sess, uint8_t reason);
 
+/* Any of: stopped by either side, a protocol violation, or a desync. Once
+ * ended, NextFrame() is false for good and the frontend should tear the
+ * session down. */
+bool GBASIONetSessionEnded(const struct GBASIONetSession* sess);
+uint8_t GBASIONetSessionEndReason(const struct GBASIONetSession* sess);
+
 /* Incoming wire frames, forwarded by the endpoint. */
 void GBASIONetSessionOnInput(struct GBASIONetSession* sess, uint32_t frame, uint16_t keys);
 void GBASIONetSessionOnTick(struct GBASIONetSession* sess, uint32_t frame,
@@ -131,6 +150,11 @@ void GBASIONetSessionOnTick(struct GBASIONetSession* sess, uint32_t frame,
 void GBASIONetSessionOnHash(struct GBASIONetSession* sess, uint32_t frame,
 	const uint32_t* hashes, uint8_t nPlayers);
 void GBASIONetSessionOnControl(struct GBASIONetSession* sess, uint8_t id, uint8_t reason);
+/* The peer left: its endpoint died, or it said goodbye / was rejected.
+ * `endReason` is the matching GGANetSessionEnd value. A leaving player ends
+ * a 2-player session; keeping the rest running needs three or more and lands
+ * with 4-player support. */
+void GBASIONetSessionOnPeerGone(struct GBASIONetSession* sess, uint8_t endReason);
 
 CXX_GUARD_END
 
