@@ -41,6 +41,7 @@ set(SIO_FILES
 	sio/net.c
 	sio/netdriver.c
 	sio/netep.c
+	sio/netrunner.c
 	sio/netsession.c)
 
 set(EXTRA_FILES

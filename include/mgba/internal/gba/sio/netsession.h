@@ -131,6 +131,11 @@ uint32_t GBASIONetSessionFrame(const struct GBASIONetSession* sess);
 void GBASIONetSessionFrameDone(struct GBASIONetSession* sess, const uint32_t* hashes,
 	uint8_t nPlayers);
 
+/* True when the frame that NextFrame() just handed out is a sampling frame,
+ * i.e. the caller should spend real state hashes on FrameDone. Hashing a
+ * whole core is not cheap, so skip it on the frames that ignore the hashes. */
+bool GBASIONetSessionSampling(const struct GBASIONetSession* sess);
+
 /* Host: announce a pause/resume to the guest; both sides stop stepping
  * while paused. */
 void GBASIONetSessionSetPaused(struct GBASIONetSession* sess, bool paused);

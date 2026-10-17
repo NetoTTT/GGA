@@ -216,6 +216,10 @@ static void _hashNote(struct GBASIONetSession* sess, uint32_t frame, bool mine,
 	}
 }
 
+bool GBASIONetSessionSampling(const struct GBASIONetSession* sess) {
+	return sess->frame != 0 && sess->frame % GGA_NET_HASH_INTERVAL == 0;
+}
+
 void GBASIONetSessionFrameDone(struct GBASIONetSession* sess, const uint32_t* hashes,
 	uint8_t nPlayers) {
 	uint8_t pay[GGA_NET_HASH_HEADER + 4 * GGA_NET_MAX_PLAYERS];
