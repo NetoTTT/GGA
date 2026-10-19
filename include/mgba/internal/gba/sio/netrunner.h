@@ -15,6 +15,7 @@
  * one thread only, and the sleep callback never runs other cores.
  */
 #include <mgba-util/common.h>
+#include <mgba-util/image.h>
 #include <mgba/internal/gba/sio/lockstep.h>
 #include <mgba/internal/gba/sio/net.h>
 
@@ -33,6 +34,7 @@ struct GBASIONetRunnerCore {
 	bool done;
 	bool running;
 	bool parked;
+	bool released;
 };
 
 struct GBASIONetRunner {
@@ -47,6 +49,14 @@ struct GBASIONetRunner {
  * what a local-only run wants. */
 void GBASIONetRunnerInit(struct GBASIONetRunner* runner, uint8_t nPlayers,
 	struct GBASIONetSession* session);
+/* Build a core that mirrors prototype as far as the emulation can observe:
+ * same platform, BIOS, ROM, save, config values, options and peripherals. A
+ * linked core built any other way can diverge on the first link handshake even
+ * though its serialized state is identical, so frontends should create every
+ * extra player core through this instead of building one by hand. `buffer` may
+ * be NULL; when set it is the video buffer the core renders into (kept by the
+ * caller). Returns a core that the caller owns, or NULL. */
+struct mCore* GBASIONetRunnerCreateMirrorCore(struct mCore* prototype, mColor* buffer, unsigned width);
 /* Attach one player's core (already loaded, configured and reset). */
 bool GBASIONetRunnerAddCore(struct GBASIONetRunner* runner, uint8_t slot, struct mCore* core);
 /* Advance every core by exactly one frame. With a session set its masks win
@@ -59,6 +69,10 @@ bool GBASIONetRunnerStep(struct GBASIONetRunner* runner, uint16_t keys);
 void GBASIONetRunnerHashes(struct GBASIONetRunner* runner, uint32_t* hashes);
 /* Detach every core. The cores themselves stay the caller's to destroy. */
 void GBASIONetRunnerDeinit(struct GBASIONetRunner* runner);
+
+/* Serialize one slot's current state and write it to `path`. Used by the LAN
+ * control server for a cross-machine byte diff. */
+void GBASIONetRunnerDumpNow(struct GBASIONetRunner* runner, uint8_t slot, const char* path);
 
 CXX_GUARD_END
 

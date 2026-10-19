@@ -175,7 +175,70 @@ it explicit in the UI, and never log or persist blobs.
 - same deterministic RTC seed and RTC reads;
 - same emulated execution order and **transfer drain** behavior;
 - same player assignment / role mapping;
-- same post-reset state.
+- same post-reset state;
+- same core construction for every player (mirrors built by the core,
+  not by the frontend -- see below).
+
+### Mirror core construction
+
+Every player's core runs locally, but a frontend only builds the one the
+user sees. The extra players are mirrors, and building them by hand in
+the frontend is a determinism hazard: two cores with byte-identical
+serialized state can still diverge when their non-serialized wiring
+differs.
+
+Measured (Zelda FSA, two Qt processes, TCP loopback, diagnostic build):
+
+- on the last frame before the game opens the link port, the two cores
+  in one process have byte-identical serialized state (`stateSize` =
+  397312), identical `siocnt`/`rcnt`, identical lockstep player fields
+  and identical `cpu` state;
+- the next frame diverged in 2350 bytes across 329 runs. The divergence
+  was traced to the cart save: the mirror had been built without one, so
+  when the game probed the EEPROM (DMA3 read at `0x0D000000`) the local
+  core returned the real save bits and the mirror returned an erased
+  `0xFF` pattern;
+- execution order, slave park/wake and the re-anchored slave clock were
+  ruled out as causes by reordering the step loop and disabling the
+  park; none moved the divergence frame.
+
+Root cause: at session start the local core's save is still in
+`GBA_SAVEDATA_AUTODETECT`, so its data buffer has not been mapped yet
+(`savedata.data == NULL`) even though the underlying `VFile` is set. The
+original guard copied the save only when `data` was non-NULL, so the
+mirror was created with no save at all. The helper now also clones the
+save from `savedata.vf` when the buffer is not mapped, so both cores
+start from identical save content. The mirror's copy is private: writes
+the game makes in-session stay in the mirror and are not written back to
+the user's save file.
+
+Decision: mirrors are built by the core, never by the frontend.
+
+```c
+struct mCore* GBASIONetRunnerCreateMirrorCore(struct mCore* prototype,
+	mColor* buffer, unsigned width);
+```
+
+The helper lives in `src/gba/sio/netrunner.c` and copies platform, BIOS,
+ROM, save, every config value, `opts` and the `mPERIPH_ROTATION` /
+`mPERIPH_GBA_LUMINANCE` / `mPERIPH_RUMBLE` peripherals from the running
+core, then resets. The video buffer is optional and stays owned by the
+caller. Frontends (Qt today; Android, SDL and iOS later) call this for
+players 2..N, so no platform code carries core construction of its own.
+
+With the save cloned, two processes playing Zelda FSA stay in sync: the
+per-frame state hashes match through the MULTI handshake (the first
+checkpoint after it, frame 119, agrees across all four core instances)
+and the run reaches its frame target with no `DESYNC`.
+
+Not covered yet:
+
+- config *overrides* (`mCoreConfigEnumerate` walks values, not
+  overrides), e.g. `savePlayerId`;
+- the rest of the per-core runtime wiring the emulation can observe:
+  `setAVStream`, `keyCallback`, `coreCallbacks`, `sync` and the frontend
+  thread. They are mirrored or reset where they mattered here, but a
+  future frontend must keep doing so.
 
 ### Tick protocol (concrete)
 
@@ -241,6 +304,26 @@ Compare per-player hashes every 60 frames (`GGA_NET_HASH_INTERVAL`). On
 mismatch: **stop and warn**; do not silently resync a session that may be
 mid-trade/mid-save. Optional "stop, export state, restart" flow later.
 
+### Test harness (control server)
+
+The LAN path is scripted through an in-process control server rather than
+a human at the UI. `LanControlServer` (`src/platform/qt/`) listens on the
+port named by `GGA_CTL_PORT` and speaks one-line JSON commands over TCP:
+
+- `emu.load <rom>`, `emu.run`, `emu.quit`;
+- `lan.host <port>`, `lan.join <host> <port>`;
+- `emu.screenshot <path>` (PNG/screenshot helper);
+- `lan.status` -> `lan_v2_active`, `lan_v2_hosting`, `lan_v2_running`,
+  `lan_v2_frame`, `lan_v2_error`;
+- `state.dump <slot> <path>` -> writes that slot's serialized state
+  (`GBASIONetRunnerDumpNow`) for a cross-machine byte diff.
+
+`gga/lan-autotest.ps1` drives two instances (host and guest) over the
+control ports, waits for a frame count, then copies each process's
+`lanplay-<pid>.log`. Set `GGA_DIAG=1` in the environment to make the
+`DBG v2` session, hash and park/ack lines print; with it unset a normal
+run is quiet.
+
 ## What we reuse vs rebuild
 
 Reuse:
@@ -283,6 +366,13 @@ insurance path, not the target.
 - **Input latency**: unavoidable (input→host→guests); trades/menus
   tolerate it, fast action needs small buffers tuned per connection.
 - **Transfer drain** correctness on trade/save boundaries.
+- **Mirror wiring**: mirror construction is centralized, but a mirror
+  whose serialized state matches the local core can still run
+  differently if its non-serialized wiring (AV stream, key callback,
+  callbacks, sync) differs. The save comment above was one such case;
+  the check is "same frame, same player, no byte difference" on a
+  handshake frame, and `state.dump` on the control server produces the
+  bytes to compare.
 
 ## References
 

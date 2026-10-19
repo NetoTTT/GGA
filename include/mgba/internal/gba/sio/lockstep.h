@@ -50,6 +50,14 @@ struct GBASIOLockstepCoordinator {
 	int32_t cycle;
 	int32_t nextHardSync;
 
+	/* GGA: set by the single-threaded runner. Every attached core is stepped
+	 * from one loop, so a slave never runs ahead of the master between
+	 * barriers and does not need to park on an empty queue. Parking there
+	 * leaves `cpu->nextEvent` at 0 (see GBASIOLockstepPlayerSleep) and the
+	 * wake does not reschedule it, which perturbs the slave's event timing
+	 * by a couple of cycles per park. */
+	bool singleThreaded;
+
 	uint16_t multiData[4];
 	uint32_t normalData[4];
 };
@@ -106,6 +114,10 @@ void GBASIOLockstepProxyEnqueue(struct GBASIOLockstepCoordinator*, int targetPla
 
 void GBASIOLockstepDriverCreate(struct GBASIOLockstepDriver*, struct mLockstepUser*);
 void GBASIOLockstepCoordinatorAckPlayer(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepPlayer*);
+/* Release one parked player on its own, for a runner that steps every core
+ * from a single thread: a finished peer cannot be run again to reach the
+ * next lockstep interval without crossing its own frame boundary. */
+void GBASIOLockstepCoordinatorWakePlayer(struct GBASIOLockstepCoordinator*, int playerId);
 
 CXX_GUARD_END
 

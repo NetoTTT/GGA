@@ -7,6 +7,7 @@
 
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/sio.h>
+#include <mgba/internal/gba/sio/ggadiag.h>
 #include <mgba-util/table.h>
 
 #include <string.h>
@@ -24,16 +25,19 @@ static void _proxyWake(struct mLockstepUser* user) {
 
 static int _proxyRequestedId(struct mLockstepUser* user) {
 	struct GBASIONetProxyUser* proxy = (struct GBASIONetProxyUser*) user;
-	fprintf(stderr, "DBG reqId proxy -> %d\n", proxy->wantedSlot);
+	if (GGA_DiagEnabled()) {
+		fprintf(stderr, "DBG reqId proxy -> %d\n", proxy->wantedSlot);
+	}
 	return proxy->wantedSlot;
 }
 
 static void _chainSleep(struct mLockstepUser* user) {
 	struct GBASIONetLink* link = (struct GBASIONetLink*) ((char*) user - offsetof(struct GBASIONetLink, chainUser));
-	/* TEMP DIAG (revert): prove the thread latches barriers. */
-	static unsigned long sleepCount = 0;
-	if (++sleepCount % 100 == 0) {
-		fprintf(stderr, "DBG chain sleeps=%lu slot=%d\n", sleepCount, link->localSlot);
+	if (GGA_DiagEnabled()) {
+		static unsigned long sleepCount = 0;
+		if (++sleepCount % 100 == 0) {
+			fprintf(stderr, "DBG chain sleeps=%lu slot=%d\n", sleepCount, link->localSlot);
+		}
 	}
 	link->ackSeen = true;
 	if (link->chainedUser && link->chainedUser->sleep) {
@@ -50,7 +54,9 @@ static void _chainWake(struct mLockstepUser* user) {
 
 static int _chainRequestedId(struct mLockstepUser* user) {
 	struct GBASIONetLink* link = (struct GBASIONetLink*) ((char*) user - offsetof(struct GBASIONetLink, chainUser));
-	fprintf(stderr, "DBG reqId chain -> %d\n", link->assignedSlot);
+	if (GGA_DiagEnabled()) {
+		fprintf(stderr, "DBG reqId chain -> %d\n", link->assignedSlot);
+	}
 	return link->assignedSlot;
 }
 
@@ -58,7 +64,9 @@ static void _chainPlayerIdChanged(struct mLockstepUser* user, int id) {
 	struct GBASIONetLink* link = (struct GBASIONetLink*) ((char*) user - offsetof(struct GBASIONetLink, chainUser));
 	link->localSlot = id;
 	link->isHost = (id == 0);
-	fprintf(stderr, "DBG idChanged -> %d\n", id);
+	if (GGA_DiagEnabled()) {
+		fprintf(stderr, "DBG idChanged -> %d\n", id);
+	}
 	if (link->chainedUser && link->chainedUser->playerIdChanged) {
 		link->chainedUser->playerIdChanged(link->chainedUser, id);
 	}
@@ -297,10 +305,8 @@ static void _alignClock(struct GBASIONetLink* link) {
  * nest, and opportunistic try-locks were observed to starve here. */
 void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 	MutexLock(&link->coordinator->mutex);
-	/* TEMP DIAG (revert): 1 Hz heartbeat on the pump thread, so it keeps
-	 * printing even when the core thread is parked. */
-	static int64_t lastHb = 0;
-	if (link->transport.nowMs) {
+	if (GGA_DiagEnabled() && link->transport.nowMs) {
+		static int64_t lastHb = 0;
 		int64_t nowMs = link->transport.nowMs(link->transport.context);
 		if (nowMs - lastHb >= 1000) {
 			lastHb = nowMs;
@@ -317,12 +323,13 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 	if (link->transferSeen && !link->coordinator->transferActive) {
 		/* Transfer just completed: everyone (including us) agreed. */
 		if (link->isHost) {
-			/* TEMP DIAG (revert): what did the games actually exchange? */
-			fprintf(stderr, "DBG result multi=%04X %04X %04X %04X slotAck=%X\n",
-				link->coordinator->multiData[0], link->coordinator->multiData[1],
-				link->coordinator->multiData[2], link->coordinator->multiData[3],
-				(link->slotAcked[0] ? 1 : 0) | (link->slotAcked[1] ? 2 : 0)
-					| (link->slotAcked[2] ? 4 : 0) | (link->slotAcked[3] ? 8 : 0));
+			if (GGA_DiagEnabled()) {
+				fprintf(stderr, "DBG result multi=%04X %04X %04X %04X slotAck=%X\n",
+					link->coordinator->multiData[0], link->coordinator->multiData[1],
+					link->coordinator->multiData[2], link->coordinator->multiData[3],
+					(link->slotAcked[0] ? 1 : 0) | (link->slotAcked[1] ? 2 : 0)
+						| (link->slotAcked[2] ? 4 : 0) | (link->slotAcked[3] ? 8 : 0));
+			}
 			_broadcastResult(link);
 		}
 		link->transferSeen = false;
@@ -351,7 +358,7 @@ void GBASIONetLinkPoll(struct GBASIONetLink* link) {
 			uint32_t v = (link->coordinator->transferMode == GBA_SIO_MULTI)
 				? link->coordinator->multiData[link->localSlot]
 				: link->coordinator->normalData[link->localSlot];
-			{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG ship slot=%d v=%04X\n", link->localSlot, v); }
+			if (GGA_DiagEnabled()) { static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG ship slot=%d v=%04X\n", link->localSlot, v); }
 			uint8_t pay[5];
 			pay[0] = (uint8_t) link->localSlot;
 			pay[1] = v & 0xFF;
@@ -556,7 +563,7 @@ void GBASIONetLinkClearStaleSleep(struct GBASIONetLink* link) {
  * keeps wire ids stable with net.h framing. */bool GBASIONetLinkOnTransferData(struct GBASIONetLink* link, int slot, uint32_t value) {
 	MutexLock(&link->coordinator->mutex);
 	_writeSlot(link, slot, value);
-	{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG gotslot slot=%d v=%04X\n", slot, value); }
+	if (GGA_DiagEnabled()) { static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG gotslot slot=%d v=%04X\n", slot, value); }
 	if (slot >= 0 && slot < MAX_GBAS) {
 		link->slotAcked[slot] = true;
 	}

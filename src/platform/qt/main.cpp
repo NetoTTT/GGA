@@ -9,6 +9,7 @@
 
 #include "ConfigController.h"
 #include "GBAApp.h"
+#include "LanControlServer.h"
 #include "Window.h"
 
 #include <mgba/core/version.h>
@@ -140,6 +141,8 @@ int main(int argc, char* argv[]) {
 
 	Window* w = application.newWindow();
 	w->argumentsPassed();
+
+	LanControlServer::startFromEnvironment(w);
 
 	application.initMultiplayer();
 

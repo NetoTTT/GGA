@@ -221,7 +221,8 @@ set(GBA_SRC
 	BattleChipView.cpp
 	DolphinConnector.cpp
 	GBAOverride.cpp
-	LANConnector.cpp)
+	LANConnector.cpp
+	LanControlServer.cpp)
 
 set(GB_SRC
 	GameBoy.cpp

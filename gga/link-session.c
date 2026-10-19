@@ -17,7 +17,7 @@
  *      player's SIOMLT_SEND byte, with no core left parked), so the data
  *      path is exercised and not just the barrier.
  *
- * Build (Linux/WSL): scripts/wsl-build-linksession.sh (mod-coop helper)
+ * Build (Linux/WSL): see the comment at the top of scripts/wsl-build-linksession.sh
  * Usage: link-session ROM BIOS FRAMES [KEYMASK_HEX] [--twice] [--nolink]
  *        link-session ROM BIOS FRAMES --siotest [--twice]
  */

@@ -7,8 +7,8 @@
 
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/io.h>
+#include <mgba/internal/gba/sio/ggadiag.h>
 
-/* TEMP DIAG (revert with the evCount print in _lockstepEvent). */
 #include <stdio.h>
 
 #define DRIVER_ID 0x6B636F4C
@@ -102,6 +102,7 @@ static uint32_t GBASIOLockstepDriverFinishNormal32(struct GBASIODriver* driver);
 static void GBASIOLockstepCoordinatorWaitOnPlayers(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepPlayer*);
 void GBASIOLockstepCoordinatorAckPlayer(struct GBASIOLockstepCoordinator*, struct GBASIOLockstepPlayer*);
 static void GBASIOLockstepCoordinatorWakePlayers(struct GBASIOLockstepCoordinator*);
+void GBASIOLockstepCoordinatorWakePlayer(struct GBASIOLockstepCoordinator*, int playerId);
 
 static int32_t GBASIOLockstepTime(struct GBASIOLockstepPlayer*);
 static void GBASIOLockstepPlayerWake(struct GBASIOLockstepPlayer*);
@@ -482,7 +483,9 @@ static void GBASIOLockstepDriverSetMode(struct GBASIODriver* driver, enum GBASIO
 	struct GBASIOLockstepPlayer* player = TableLookup(&coordinator->players, lockstep->lockstepId);
 	if (mode != player->mode) {
 		mLOG(GBA_SIO, DEBUG, "Switching mode from %d to %d", player->mode, mode);
-		fprintf(stderr, "DBG setMode pid=%d %d->%d\n", player->playerId, player->mode, mode);
+		if (GGA_DiagEnabled()) {
+			fprintf(stderr, "DBG setMode pid=%d %d->%d\n", player->playerId, player->mode, mode);
+		}
 		player->mode = mode;
 		struct GBASIOLockstepEvent event = {
 			.type = SIO_EV_MODE_SET,
@@ -596,7 +599,7 @@ static void GBASIOLockstepDriverFinishMultiplayer(struct GBASIODriver* driver, u
 			     coordinator->multiData[2],
 			     coordinator->multiData[3]);
 			memcpy(data, coordinator->multiData, sizeof(uint16_t) * 4);
-			{ static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG finishM pid=%d dr=%d m=%04X %04X\n", player->playerId, player->dataReceived, coordinator->multiData[0], coordinator->multiData[1]); }
+			if (GGA_DiagEnabled()) { static unsigned long n; if (++n % 200 == 0) fprintf(stderr, "DBG finishM pid=%d dr=%d m=%04X %04X\n", player->playerId, player->dataReceived, coordinator->multiData[0], coordinator->multiData[1]); }
 		}
 		player->dataReceived = false;
 		if (player->playerId == 0) {
@@ -891,7 +894,7 @@ static void _setData(struct GBASIOLockstepCoordinator* coordinator, uint32_t id,
 	switch (coordinator->transferMode) {
 	case GBA_SIO_MULTI:
 		coordinator->multiData[id] = sio->p->memory.io[GBA_REG(SIOMLT_SEND)];
-		{ static unsigned long n; if (++n % 400 == 0) fprintf(stderr, "DBG setData id=%u v=%04X\n", id, coordinator->multiData[id]); }
+		if (GGA_DiagEnabled()) { static unsigned long n; if (++n % 400 == 0) fprintf(stderr, "DBG setData id=%u v=%04X\n", id, coordinator->multiData[id]); }
 		break;
 	case GBA_SIO_NORMAL_8:
 		coordinator->normalData[id] = sio->p->memory.io[GBA_REG(SIODATA8)];
@@ -977,16 +980,17 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 	struct GBASIOLockstepCoordinator* coordinator = lockstep->coordinator;
 	MutexLock(&coordinator->mutex);
 	struct GBASIOLockstepPlayer* player = TableLookup(&coordinator->players, lockstep->lockstepId);
-	/* TEMP DIAG (revert): who spins, and is their queue stuck? */
-	static unsigned long evCount = 0;
-	if (++evCount % 5000 == 0) {
-		int32_t ptime = player ? GBASIOLockstepTime(player) : -999999;
-		int32_t headTs = (player && player->queue) ? player->queue->timestamp : -999999;
-		int32_t nevt = player ? _untilNextSync(coordinator, player) : -999999;
-		fprintf(stderr, "DBG lockstep events=%lu pid=%d q=%d asleep=%d cyc=%d ptime=%d head=%d nevt=%d\n", evCount,
-			player ? player->playerId : -99, (player && player->queue) ? 1 : 0,
-			player ? player->asleep : -99,
-			coordinator->cycle, ptime, headTs, nevt);
+	if (GGA_DiagEnabled()) {
+		static unsigned long evCount = 0;
+		if (++evCount % 5000 == 0) {
+			int32_t ptime = player ? GBASIOLockstepTime(player) : -999999;
+			int32_t headTs = (player && player->queue) ? player->queue->timestamp : -999999;
+			int32_t nevt = player ? _untilNextSync(coordinator, player) : -999999;
+			fprintf(stderr, "DBG lockstep events=%lu pid=%d q=%d asleep=%d cyc=%d ptime=%d head=%d nevt=%d\n", evCount,
+				player ? player->playerId : -99, (player && player->queue) ? 1 : 0,
+				player ? player->asleep : -99,
+				coordinator->cycle, ptime, headTs, nevt);
+		}
 	}
 	struct GBASIO* sio = player->driver->d.p;
 	mASSERT_LOG(GBA_SIO, player->playerId >= 0 && player->playerId < 4, "Invalid multiplayer ID %i", player->playerId);
@@ -1114,7 +1118,8 @@ void _lockstepEvent(struct mTiming* timing, void* context, uint32_t cyclesLate) 
 	 * between transfer barriers instead; the lockstep event still fires
 	 * on its own interval. Transfers keep working: while a transfer is
 	 * in flight the queue is non-empty, so no park happens anyway. */
-	if (player->playerId != 0 && nextEvent <= LOCKSTEP_INTERVAL && !coordinator->remoteClock) {
+	if (player->playerId != 0 && nextEvent <= LOCKSTEP_INTERVAL && !coordinator->remoteClock
+			&& (!coordinator->singleThreaded || player->queue || wasDetach)) {
 		if (!player->queue || wasDetach) {
 			GBASIOLockstepPlayerSleep(player);
 			// XXX: Is there a better way to gain sync lock at the beginning?
@@ -1152,9 +1157,10 @@ void GBASIOLockstepCoordinatorWaitOnPlayers(struct GBASIOLockstepCoordinator* co
 	_advanceCycle(coordinator, player);
 	mLOG(GBA_SIO, DEBUG, "Primary waiting for players to ack");
 	coordinator->waiting = ((1 << coordinator->nAttached) - 1) & ~TARGET(player->playerId);
-	/* TEMP DIAG (revert): the park that freezes the host. */
-	fprintf(stderr, "DBG park pid=%d waiting=%x nAtt=%d tActive=%d\n",
-		player->playerId, coordinator->waiting, coordinator->nAttached, coordinator->transferActive);
+	if (GGA_DiagEnabled()) {
+		fprintf(stderr, "DBG park pid=%d waiting=%x nAtt=%d tActive=%d\n",
+			player->playerId, coordinator->waiting, coordinator->nAttached, coordinator->transferActive);
+	}
 	GBASIOLockstepPlayerSleep(player);
 	GBASIOLockstepCoordinatorWakePlayers(coordinator);
 
@@ -1180,12 +1186,35 @@ void GBASIOLockstepPlayerWake(struct GBASIOLockstepPlayer* player) {
 	player->driver->user->wake(player->driver->user);
 }
 
+/* Release a single parked player. A runner that drives every core from one
+ * thread reaches a point where the only cores left to run have already
+ * finished their frame, so it cannot wait for the next lockstep interval of
+ * a peer without running that peer past its frame boundary. Letting the
+ * parked player run its own frame instead keeps every core inside its
+ * frame. Player 0 is skipped only in the sense that it is symmetric: any
+ * attached player may be released this way. */
+void GBASIOLockstepCoordinatorWakePlayer(struct GBASIOLockstepCoordinator* coordinator, int playerId) {
+	struct GBASIOLockstepPlayer* player;
+
+	if (playerId < 0 || playerId >= coordinator->nAttached || !coordinator->attachedPlayers[playerId]) {
+		return;
+	}
+	MutexLock(&coordinator->mutex);
+	player = TableLookup(&coordinator->players, coordinator->attachedPlayers[playerId]);
+	if (player) {
+		GBASIOLockstepPlayerWake(player);
+	}
+	MutexUnlock(&coordinator->mutex);
+}
+
 void GBASIOLockstepCoordinatorAckPlayer(struct GBASIOLockstepCoordinator* coordinator, struct GBASIOLockstepPlayer* player) {
 	if (player->playerId == 0) {
 		return;
 	}
 	coordinator->waiting &= ~TARGET(player->playerId);
-	fprintf(stderr, "DBG ack pid=%d waiting=%x\n", player->playerId, coordinator->waiting);
+	if (GGA_DiagEnabled()) {
+		fprintf(stderr, "DBG ack pid=%d waiting=%x\n", player->playerId, coordinator->waiting);
+	}
 	if (!coordinator->waiting) {
 		mLOG(GBA_SIO, DEBUG, "All players acked, waking primary");
 		if (coordinator->transferActive) {

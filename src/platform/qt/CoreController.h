@@ -242,6 +242,9 @@ public slots:
 	bool isLAN2Hosting() const { return m_lan2Active && m_lan2Host; }
 	bool isLAN2Running() const { return m_lan2Running; }
 	int lan2Frame() const { return m_lan2Frame; }
+	/* Writes one simulated core's serialized state out, for scripted
+	 * cross-machine diffs (LanControlServer). */
+	void lan2DumpState(int slot, const QString& path);
 #endif
 
 	void setAVStream(mAVStream*);
@@ -415,13 +418,21 @@ private:
 	GBASIONetLink m_lan2Link;
 	LAN2RtcSource m_lan2Rtc;
 	struct mCore* m_lan2Peer = nullptr;
+	/* The mirror core renders into this; it must not share the local core's
+	 * frame buffer, and it lives as long as the mirror does. */
+	QByteArray m_lan2PeerBuffer;
 	bool m_lan2Active = false;
 	bool m_lan2Running = false;
 	bool m_lan2RunnerReady = false;
 	bool m_lan2Host = false;
 	bool m_lan2Paused = false;
 	int m_lan2Frame = 0;
+	int m_lan2LocalKeys = 0;
 	int64_t m_lan2LastFrameMs = 0;
+	/* Throttle for the opt-in session-state log, and a one-shot flag for the
+	 * end-of-session diagnostic. */
+	int64_t m_lan2DiagMs = 0;
+	bool m_lan2HashLogged = false;
 #endif
 
 #ifdef ENABLE_DEBUGGERS

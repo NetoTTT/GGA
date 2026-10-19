@@ -29,6 +29,8 @@
 #include <mgba/internal/gba/gba.h>
 #include <mgba/gba/core.h>
 #include <mgba/internal/gba/renderers/cache-set.h>
+#include <mgba/internal/gba/savedata.h>
+#include <mgba/internal/gba/serialize.h>
 #include <mgba/internal/gba/sharkport.h>
 #endif
 #ifdef M_CORE_GB
@@ -473,6 +475,16 @@ static int64_t lanNowMs(void*) {
 	return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+/* v2 netplay diagnostics are opt-in: the probes read both cores next to the
+ * scheduling they measure, so a normal run must not pay for them. */
+static bool lanDiagEnabled() {
+	static int enabled = -1;
+	if (enabled < 0) {
+		enabled = qgetenv("GGA_DIAG").isEmpty() ? 0 : 1;
+	}
+	return enabled;
+}
+
 #ifdef M_CORE_GBA
 static CoreController* lanOwner(void* context) {
 	auto* ep = static_cast<GBASIONetEndpoint*>(context);
@@ -671,7 +683,9 @@ bool CoreController::pollClientAttach() {
 	//     close enough for barrier sync).
 	{
 		CoreController::Interrupter interrupter(this);
-		fprintf(stderr, "NET client attach\n");
+		if (lanDiagEnabled()) {
+			fprintf(stderr, "NET client attach\n");
+		}
 		if (m_lanDriverAttached) {
 			m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
 			GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
@@ -681,7 +695,9 @@ bool CoreController::pollClientAttach() {
 		interrupter.resume();
 	}
 	reset();
-	fprintf(stderr, "NET client reset done\n");
+	if (lanDiagEnabled()) {
+		fprintf(stderr, "NET client reset done\n");
+	}
 	{
 		CoreController::Interrupter interrupter(this);
 		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
@@ -691,7 +707,9 @@ bool CoreController::pollClientAttach() {
 		m_lanDriver.d.reset(&m_lanDriver.d);
 		GBASIONetLinkAddPeer(&m_lanLink, 0);
 		GBASIONetLinkClearStaleSleep(&m_lanLink);
-		fprintf(stderr, "NET client peer added\n");
+		if (lanDiagEnabled()) {
+			fprintf(stderr, "NET client peer added\n");
+		}
 	interrupter.resume();
 	}
 	m_lanSession = true;
@@ -790,38 +808,37 @@ bool CoreController::attachLAN2(bool isHost, const QString& address, int port) {
 	if (freopen(v2LogPath.toLocal8Bit().constData(), "w", stderr)) {
 		setvbuf(stderr, nullptr, _IONBF, 0);
 	}
+	if (lanDiagEnabled()) {
+		fprintf(stderr, "DBG v2 attach host=%d port=%d\n", (int) isHost, port);
+		fflush(stderr);
+	}
 
 	GBA* local = static_cast<GBA*>(m_threadContext.core->board);
 	if (!local || !local->memory.rom || !local->memory.romSize) {
 		m_lanError = tr("No ROM is loaded.");
+		if (lanDiagEnabled()) {
+			fprintf(stderr, "DBG v2 attach failed: no rom\n");
+		}
 		return false;
 	}
 
 	// A second GBA built from the image that is actually running here
 	// (patches and all), so both players boot byte for byte identical and
-	// input-only sync holds. The peer is stepped by the runner, never by a
-	// thread of its own.
-	mCore* peer = GBACoreCreate();
+	// input-only sync holds. GBASIONetRunnerCreateMirrorCore copies the
+	// platform, BIOS, ROM, save, config and peripherals, so the mirror cannot
+	// pick up a different setup from the frontend. The peer is stepped by the
+	// runner, never by a thread of its own.
+	m_lan2PeerBuffer.resize(240 * 160 * sizeof(mColor));
+	m_lan2PeerBuffer.fill(0);
+	mCore* peer = GBASIONetRunnerCreateMirrorCore(m_threadContext.core,
+		reinterpret_cast<mColor*>(m_lan2PeerBuffer.data()), 240);
 	if (!peer) {
-		m_lanError = tr("Could not create a second core.");
-		return false;
-	}
-	peer->init(peer);
-	mCoreInitConfig(peer, nullptr);
-	if (local->memory.bios) {
-		VFile* biosVf = VFileFromConstMemory(local->memory.bios, 0x4000);
-		if (biosVf) {
-			peer->loadBIOS(peer, biosVf, 0);
+		m_lanError = tr("Could not mirror the running game into the second core.");
+		if (lanDiagEnabled()) {
+			fprintf(stderr, "DBG v2 attach failed: peer create\n");
 		}
-	}
-	VFile* romVf = VFileFromConstMemory(local->memory.rom, local->memory.romSize);
-	if (!romVf || !peer->loadROM(peer, romVf)) {
-		mCoreConfigDeinit(&peer->config);
-		peer->deinit(peer);
-		m_lanError = tr("Could not mirror the running ROM into the second core.");
 		return false;
 	}
-	peer->reset(peer);
 	m_lan2Peer = peer;
 
 	uint8_t localSlot = isHost ? 0 : 1;
@@ -855,6 +872,10 @@ bool CoreController::attachLAN2(bool isHost, const QString& address, int port) {
 	m_lan2Link.localSlot = -1;
 	GBASIONetEndpointInit(&m_lan2Endpoint, &m_lan2Link, &m_lan2Transport);
 	m_lan2Endpoint.userdata = this;
+	// Bind the endpoint to the session: this both gives the session its wire
+	// (TICK/INPUT/HASH out) and routes the peer's INPUT/TICK in. Without it
+	// the host never ticks and the guest never steps.
+	GBASIONetSessionSetPeer(&m_lan2State, &m_lan2Endpoint);
 
 	m_lan2Rtc.epochMs = QDateTime::currentMSecsSinceEpoch();
 	installLAN2Rtc();
@@ -866,6 +887,9 @@ bool CoreController::attachLAN2(bool isHost, const QString& address, int port) {
 	if (isHost) {
 		if (!GBASIONetEndpointListen(&m_lan2Endpoint, port)) {
 			m_lanError = tr("Could not listen on port %1.").arg(port);
+			if (lanDiagEnabled()) {
+				fprintf(stderr, "DBG v2 attach failed: listen\n");
+			}
 			detachLAN2();
 			return false;
 		}
@@ -873,11 +897,18 @@ bool CoreController::attachLAN2(bool isHost, const QString& address, int port) {
 		QByteArray hostBytes = address.toUtf8();
 		if (!GBASIONetEndpointConnect(&m_lan2Endpoint, hostBytes.constData(), port)) {
 			m_lanError = tr("Could not reach %1:%2.").arg(address).arg(port);
+			if (lanDiagEnabled()) {
+				fprintf(stderr, "DBG v2 attach failed: connect\n");
+			}
 			detachLAN2();
 			return false;
 		}
 	}
 	startLanWorker();
+	if (lanDiagEnabled()) {
+		fprintf(stderr, "DBG v2 attach ok\n");
+		fflush(stderr);
+	}
 	return true;
 }
 
@@ -897,6 +928,33 @@ void CoreController::startLAN2Session() {
 	const QSize size = screenDimensions();
 	m_threadContext.core->reset(m_threadContext.core);
 	m_lan2Peer->reset(m_lan2Peer);
+#ifdef M_CORE_GBA
+	/* A reset keeps CPU prefetch latches and the cart save type that the
+	 * local core resolved while playing alone, but a freshly created peer
+	 * core never saw them. Both cores must start on the same values or the
+	 * first state hash checkpoint reports a divergence. */
+	if (m_threadContext.core->platform(m_threadContext.core) == mPLATFORM_GBA) {
+		struct GBA* local = (struct GBA*) m_threadContext.core->board;
+		struct GBA* peer = (struct GBA*) m_lan2Peer->board;
+		local->memory.prefetch = false;
+		local->memory.biosPrefetch = 0;
+		local->memory.lastPrefetchedPc = 0;
+		peer->memory.prefetch = false;
+		peer->memory.biosPrefetch = 0;
+		peer->memory.lastPrefetchedPc = 0;
+		/* The cart save type is resolved by the game's own detection writes,
+		 * and the two instances may have resolved it at different points
+		 * while playing alone. Drop both cores back to autodetect so the
+		 * same emulated writes resolve it identically in-session. */
+		GBASavedataForceType(&local->memory.savedata, GBA_SAVEDATA_AUTODETECT);
+		GBASavedataForceType(&peer->memory.savedata, GBA_SAVEDATA_AUTODETECT);
+		/* The peer is built from a default config, so any emulation-relevant
+		 * flag the local core derived from the user's config has to be
+		 * mirrored or the two copies of a logical core disagree. */
+		peer->idleOptimization = local->idleOptimization;
+		peer->allowOpposingDirections = local->allowOpposingDirections;
+	}
+#endif
 	m_threadContext.core->setVideoBuffer(m_threadContext.core,
 		reinterpret_cast<mColor*>(m_activeBuffer.data()), size.width());
 	m_frameCounter = 0;
@@ -905,6 +963,9 @@ void CoreController::startLAN2Session() {
 	if (!GBASIONetRunnerAddCore(&m_lan2Runner, localSlot, m_threadContext.core) ||
 			!GBASIONetRunnerAddCore(&m_lan2Runner, peerSlot, m_lan2Peer)) {
 		m_lan2Active = false;
+		if (lanDiagEnabled()) {
+			fprintf(stderr, "DBG v2 addcore failed\n");
+		}
 		emit statusPosted(tr("Could not attach both cores to the link runner."));
 		return;
 	}
@@ -912,6 +973,9 @@ void CoreController::startLAN2Session() {
 		GBASIONetSessionStart(&m_lan2State);
 	}
 	m_lan2LastFrameMs = lanNowMs(nullptr);
+	if (lanDiagEnabled()) {
+		fprintf(stderr, "DBG v2 session start host=%d\n", (int) m_lan2Host);
+	}
 	emit statusPosted(tr("Link established (v2 input sync)."));
 }
 
@@ -920,10 +984,35 @@ void CoreController::pumpLAN2() {
 		return;
 	}
 	GBASIONetEndpointPoll(&m_lan2Endpoint);
+	if (lanDiagEnabled()) {
+		int64_t dnow = lanNowMs(nullptr);
+		if (dnow - m_lan2DiagMs >= 1000) {
+			m_lan2DiagMs = dnow;
+			fprintf(stderr, "DBG v2 state host=%d run=%d paused=%d frame=%u high=%u lag=%d coord=%d wait=%x rf=%llu ended=%d reason=%d\n",
+				(int) m_lan2Host, (int) m_lan2Running, (int) m_lan2Paused,
+				(unsigned) m_lan2State.frame,
+				(unsigned) m_lan2State.guestHigh, (int) m_lan2State.lagging,
+				m_lan2Runner.coord.nAttached, m_lan2Runner.coord.waiting,
+				(unsigned long long) m_lan2Runner.frames,
+				(int) GBASIONetSessionEnded(&m_lan2State), (int) GBASIONetSessionEndReason(&m_lan2State));
+			fflush(stderr);
+		}
+	}
 	if (!m_lan2Running) {
 		bool ready = m_lan2Host ? m_lan2Endpoint.peerHello : m_lan2Endpoint.welcomed;
 		if (ready) {
+			if (lanDiagEnabled()) {
+				fprintf(stderr, "DBG v2 ready host=%d hello=%d welcomed=%d\n",
+					(int) m_lan2Host, (int) m_lan2Endpoint.peerHello, (int) m_lan2Endpoint.welcomed);
+			}
 			startLAN2Session();
+			if (lanDiagEnabled() && m_lan2Running) {
+				uint32_t initHash[GGA_NET_MAX_PLAYERS] = { 0 };
+				GBASIONetRunnerHashes(&m_lan2Runner, initHash);
+				fprintf(stderr, "DBG v2 init host=%d p0=%08X p1=%08X\n",
+					(int) m_lan2Host, initHash[0], initHash[1]);
+				fflush(stderr);
+			}
 		}
 		return;
 	}
@@ -938,14 +1027,45 @@ void CoreController::pumpLAN2() {
 	}
 	m_lan2LastFrameMs = now;
 	GBASIONetSessionSetLocalInput(&m_lan2State,
-		static_cast<uint16_t>(m_threadContext.core->getKeys(m_threadContext.core)));
-	if (GBASIONetRunnerStep(&m_lan2Runner, 0)) {
+		static_cast<uint16_t>(m_lan2LocalKeys));
+	bool stepped = GBASIONetRunnerStep(&m_lan2Runner, 0);
+	if (stepped) {
 		finishFrame();
 		++m_lan2Frame;
+		if (lanDiagEnabled() && m_lan2Frame % 60 == 1) {
+			fprintf(stderr, "DBG v2 frame=%u\n", (unsigned) m_lan2Frame);
+		}
 	}
 	if (GBASIONetSessionEnded(&m_lan2State)) {
+		if (!m_lan2HashLogged && lanDiagEnabled()) {
+			int s;
+			fprintf(stderr, "DBG v2 ended host=%d reason=%d frame=%u\n",
+				(int) m_lan2Host, (int) GBASIONetSessionEndReason(&m_lan2State),
+				(unsigned) m_lan2State.frame);
+			for (s = 0; s < GGA_NET_HASH_WINDOW; ++s) {
+				if (!m_lan2State.hashMineValid[s] && !m_lan2State.hashTheirsValid[s]) {
+					continue;
+				}
+				fprintf(stderr, "DBG v2 hash host=%d s=%d f=%u mv=%d tv=%d p0m=%08X p0t=%08X p1m=%08X p1t=%08X\n",
+					(int) m_lan2Host, s, (unsigned) m_lan2State.hashFrame[s],
+					(int) m_lan2State.hashMineValid[s], (int) m_lan2State.hashTheirsValid[s],
+					m_lan2State.hashMine[s][0], m_lan2State.hashTheirs[s][0],
+					m_lan2State.hashMine[s][1], m_lan2State.hashTheirs[s][1]);
+			}
+			fflush(stderr);
+		}
+		m_lan2HashLogged = true;
 		emit statusPosted(tr("Link session ended (%1).").arg(GBASIONetSessionEndReason(&m_lan2State)));
 	}
+}
+
+void CoreController::lan2DumpState(int slot, const QString& path) {
+	if (!m_lan2RunnerReady || slot < 0 || slot >= GGA_NET_MAX_PLAYERS) {
+		return;
+	}
+	Interrupter interrupter(this);
+	GBASIONetRunnerDumpNow(&m_lan2Runner, static_cast<uint8_t>(slot),
+		path.toLocal8Bit().constData());
 }
 
 void CoreController::detachLAN2() {
@@ -964,6 +1084,10 @@ void CoreController::detachLAN2() {
 	}
 	m_lan2Running = false;
 	m_lan2Paused = false;
+	// Drop both backlinks before the endpoint goes away: the session keeps a
+	// pointer to it, and the endpoint keeps one to the session.
+	m_lan2State.peer = NULL;
+	m_lan2Endpoint.session = NULL;
 	GBASIONetEndpointClose(&m_lan2Endpoint);
 	GBASIONetLinkDeinit(&m_lan2Link);
 	GBASIOLockstepCoordinatorDeinit(&m_lan2LinkCoord);
@@ -1015,7 +1139,9 @@ bool CoreController::pollHostSession() {
 	// core where the reset can't land. See pollClientAttach.)
 	{
 		CoreController::Interrupter interrupter(this);
-		fprintf(stderr, "NET host session start\n");
+		if (lanDiagEnabled()) {
+			fprintf(stderr, "NET host session start\n");
+		}
 		if (m_lanDriverAttached) {
 			m_threadContext.core->setPeripheral(m_threadContext.core, mPERIPH_GBA_LINK_PORT, NULL);
 			GBASIOLockstepCoordinatorDetach(&m_lanCoord, &m_lanDriver);
@@ -1025,7 +1151,9 @@ bool CoreController::pollHostSession() {
 		interrupter.resume();
 	}
 	reset();
-	fprintf(stderr, "NET host reset done\n");
+	if (lanDiagEnabled()) {
+		fprintf(stderr, "NET host reset done\n");
+	}
 	{
 		CoreController::Interrupter interrupter(this);
 		GBASIOLockstepCoordinatorAttach(&m_lanCoord, &m_lanDriver);
@@ -1037,7 +1165,9 @@ bool CoreController::pollHostSession() {
 		m_lanDriver.d.reset(&m_lanDriver.d);
 		GBASIONetLinkAddPeer(&m_lanLink, 1);
 		GBASIONetLinkClearStaleSleep(&m_lanLink);
-		fprintf(stderr, "NET host peer added\n");
+		if (lanDiagEnabled()) {
+			fprintf(stderr, "NET host peer added\n");
+		}
 		interrupter.resume();
 	}
 	m_lanSession = true;
@@ -1897,6 +2027,12 @@ void CoreController::updateKeys() {
 	int activeKeys = m_activeKeys | polledKeys;
 	activeKeys |= m_threadContext.core->getKeys(m_threadContext.core) & ~m_removedKeys;
 	m_removedKeys = polledKeys;
+	if (m_lan2Running) {
+		/* v2 netplay: the runner applies exactly the masks it broadcasts to
+		 * the peer, so the frontend must not mutate the core mid-frame. */
+		m_lan2LocalKeys = activeKeys;
+		return;
+	}
 	m_threadContext.core->setKeys(m_threadContext.core, activeKeys);
 }
 

@@ -7,9 +7,10 @@
 A mobile-first Game Boy Advance emulator with **4-player online link play**,
 built for phones and PCs to play together.
 
-> Status: early scaffold. The emulation core is currently mGBA's, imported
-> with full history. Active work tracks: network link driver, Android
-> frontend, and a LAN/internet lobby hub. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> Status: mGBA-derived core with GGA LAN netplay work in progress. The
+> current netplay direction is deterministic input sync; see
+> [docs/NETPLAY-ARCHITECTURE.md](docs/NETPLAY-ARCHITECTURE.md) and
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Vision
 
@@ -23,14 +24,13 @@ built for phones and PCs to play together.
 
 - `src/`, `include/`, `res/`, `tools/` — emulation core and existing
   frontends, imported from mGBA (see Credits).
-- `gga/` — new GGA code (netplay transport, hub, mobile frontend).
-  *(created as the project grows; not yet present)*
+- `gga/` — GGA netplay harnesses and command-line tools.
 - `docs/` — design docs and roadmap.
 
 ## Building
 
-Standard mGBA build instructions apply for now (CMake; see upstream docs).
-GGA-specific build targets will be documented here once `gga/` lands.
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the CLI build and LAN test
+workflow. The Qt LAN v2 implementation is under active development.
 
 ## Credits
 

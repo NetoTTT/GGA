@@ -9,6 +9,7 @@
 #include <mgba/internal/gba/sio/net.h>
 #include <mgba/internal/gba/sio/netdriver.h>
 #include <mgba/internal/gba/sio/netsession.h>
+#include <mgba/internal/gba/sio/ggadiag.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -246,12 +247,13 @@ static void _transportSend(void* context, int targetPlayer, int kind, int32_t a,
 	if (id < 32) {
 		ep->statTx[id]++;
 	}
-	/* TEMP DIAG (revert): see who sends what, with ms timestamps. */
-	int64_t nowMs = 0;
-	if (ep->link && ep->link->transport.nowMs) {
-		nowMs = ep->link->transport.nowMs(ep->link->transport.context);
+	if (GGA_DiagEnabled()) {
+		int64_t nowMs = 0;
+		if (ep->link && ep->link->transport.nowMs) {
+			nowMs = ep->link->transport.nowMs(ep->link->transport.context);
+		}
+		fprintf(stderr, "%lld NET tx id=%u len=%u\n", (long long) nowMs, id, (unsigned) payLen);
 	}
-	fprintf(stderr, "%lld NET tx id=%u len=%u\n", (long long) nowMs, id, (unsigned) payLen);
 	_outboxAppend(ep, id, pay, (uint16_t) payLen);
 }
 
@@ -272,14 +274,18 @@ static void _flushOutbox(struct GBASIONetEndpoint* ep) {
 
 static void _defer(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* pay, uint16_t len) {
 	if (ep->nDeferred >= GGA_NET_DEFER_MAX || len > GGA_NET_DEFER_PAY) {
-		fprintf(stderr, "NET defer DROP id=%u\n", id);
+		if (GGA_DiagEnabled()) {
+			fprintf(stderr, "NET defer DROP id=%u\n", id);
+		}
 		return;
 	}
 	ep->deferred[ep->nDeferred].id = id;
 	ep->deferred[ep->nDeferred].len = len;
 	memcpy(ep->deferred[ep->nDeferred].pay, pay, len);
 	++ep->nDeferred;
-	fprintf(stderr, "NET deferred id=%u n=%zu\n", id, ep->nDeferred);
+	if (GGA_DiagEnabled()) {
+		fprintf(stderr, "NET deferred id=%u n=%zu\n", id, ep->nDeferred);
+	}
 }
 
 /* Route one frame into the lockstep driver. True = consumed (even if
@@ -332,7 +338,9 @@ static void _replayDeferred(struct GBASIONetEndpoint* ep) {
 		if (!_route(ep, d->id, d->pay, d->len)) {
 			break;
 		}
-		fprintf(stderr, "NET replayed id=%u\n", d->id);
+		if (GGA_DiagEnabled()) {
+			fprintf(stderr, "NET replayed id=%u\n", d->id);
+		}
 		++done;
 	}
 	if (done > 0) {
@@ -344,12 +352,13 @@ static void _replayDeferred(struct GBASIONetEndpoint* ep) {
 
 static void _dispatch(struct GBASIONetEndpoint* ep, uint8_t id, const uint8_t* pay, uint16_t len) {
 	struct GBASIONetLink* link = ep->link;
-	/* TEMP DIAG (revert): ms timestamps. */
-	int64_t nowMs = 0;
-	if (link && link->transport.nowMs) {
-		nowMs = link->transport.nowMs(link->transport.context);
+	if (GGA_DiagEnabled()) {
+		int64_t nowMs = 0;
+		if (link && link->transport.nowMs) {
+			nowMs = link->transport.nowMs(link->transport.context);
+		}
+		fprintf(stderr, "%lld NET rx id=%u len=%u\n", (long long) nowMs, id, len);
 	}
-	fprintf(stderr, "%lld NET rx id=%u len=%u\n", (long long) nowMs, id, len);
 	if (id < 32) {
 		ep->statRx[id]++;
 	}
@@ -578,12 +587,16 @@ void GBASIONetEndpointPoll(struct GBASIONetEndpoint* ep) {
 	if (!SOCKET_FAILED(ep->listenSock) && SOCKET_FAILED(ep->conn)) {
 		Socket peer = SocketAccept(ep->listenSock, 0);
 		if (!SOCKET_FAILED(peer)) {
-			fprintf(stderr, "NET accepted peer\n");
+			if (GGA_DiagEnabled()) {
+				fprintf(stderr, "NET accepted peer\n");
+			}
 			SocketSetBlocking(peer, false);
 			SocketSetTCPPush(peer, 1);
 			ep->conn = peer;
 		} else if (!SocketWouldBlock()) {
-			fprintf(stderr, "NET accept error %d\n", SocketError());
+			if (GGA_DiagEnabled()) {
+				fprintf(stderr, "NET accept error %d\n", SocketError());
+			}
 		}
 	}
 	if (!SOCKET_FAILED(ep->conn)) {
